@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { supabase } from './supabase'
+import { supabase } from '../supabase'   // <-- FIXED: use '../supabase'
 
 export default function ConversionSettings({ user }) {
   const [rate, setRate] = useState('')
