@@ -17,21 +17,49 @@ export default function CustomersList() {
   })
 
   const fetchDropdownOptions = async () => {
-    const { data: packages } = await supabase
-      .from('clients')
-      .select('current_package')
-      .not('current_package', 'is', null)
-      .order('current_package')
-    const uniquePackages = [...new Set(packages?.map(p => p.current_package).filter(Boolean))]
-    setPackageOptions(uniquePackages)
-
-    const { data: agents } = await supabase
-      .from('clients')
-      .select('retention_agent')
-      .not('retention_agent', 'is', null)
-      .order('retention_agent')
-    const uniqueAgents = [...new Set(agents?.map(a => a.retention_agent).filter(Boolean))]
-    setAgentOptions(uniqueAgents)
+    try {
+      // Distinct packages
+      const { data: packages, error: pkgError } = await supabase
+        .from('clients')
+        .select('current_package')
+        .not('current_package', 'is', null)
+        .neq('current_package', '')
+        .order('current_package')
+      
+      if (pkgError) {
+        console.error('Error fetching packages:', pkgError)
+      } else {
+        let uniquePackages = [...new Set(
+          packages
+            .map(p => p.current_package?.trim())
+            .filter(p => p && p !== '')
+        )]
+        console.log('Packages loaded:', uniquePackages)
+        setPackageOptions(uniquePackages)
+      }
+      
+      // Distinct agents
+      const { data: agents, error: agentError } = await supabase
+        .from('clients')
+        .select('retention_agent')
+        .not('retention_agent', 'is', null)
+        .neq('retention_agent', '')
+        .order('retention_agent')
+      
+      if (agentError) {
+        console.error('Error fetching agents:', agentError)
+      } else {
+        let uniqueAgents = [...new Set(
+          agents
+            .map(a => a.retention_agent?.trim())
+            .filter(a => a && a !== '')
+        )]
+        console.log('Agents loaded:', uniqueAgents)
+        setAgentOptions(uniqueAgents)
+      }
+    } catch (err) {
+      console.error('fetchDropdownOptions error:', err)
+    }
   }
 
   const fetchClients = async () => {
@@ -57,7 +85,6 @@ export default function CustomersList() {
 
   const filtered = useMemo(() => {
     let result = [...clients]
-
     if (filters.account_id) {
       result = result.filter(c => c.account_id.toLowerCase().includes(filters.account_id.toLowerCase()))
     }
@@ -79,7 +106,6 @@ export default function CustomersList() {
     if (filters.account_status) {
       result = result.filter(c => (c.account_status || '') === filters.account_status)
     }
-
     return result
   }, [clients, filters])
 
@@ -115,21 +141,21 @@ export default function CustomersList() {
           <input type="text" name="name" placeholder="Name" value={filters.name} onChange={handleFilterChange} />
           <input type="text" name="contact" placeholder="Phone" value={filters.contact} onChange={handleFilterChange} />
           <input type="text" name="address" placeholder="Address" value={filters.address} onChange={handleFilterChange} />
-
+          
           <select name="current_package" value={filters.current_package} onChange={handleFilterChange}>
             <option value="">All Packages</option>
             {packageOptions.map(pkg => (
               <option key={pkg} value={pkg}>{pkg}</option>
             ))}
           </select>
-
+          
           <select name="retention_agent" value={filters.retention_agent} onChange={handleFilterChange}>
             <option value="">All Agents</option>
             {agentOptions.map(agent => (
               <option key={agent} value={agent}>{agent}</option>
             ))}
           </select>
-
+          
           <select name="account_status" value={filters.account_status} onChange={handleFilterChange}>
             <option value="">All Status</option>
             <option value="active">Active</option>
