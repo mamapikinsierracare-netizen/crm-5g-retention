@@ -10,7 +10,8 @@ import PrivateMessageInbox from './PrivateMessageInbox'
 import AuditLog from './AuditLog'
 import UserManagement from './UserManagement'
 import NotificationsCenter from './NotificationsCenter'
-import BulkUpload from './BulkUpload'           // <-- NEW IMPORT
+import BulkUpload from './BulkUpload'
+import CustomersList from './CustomersList'           // NEW import for Customers tab
 import { supabase } from './supabase'
 
 // Import logo from src/assets
@@ -76,7 +77,7 @@ function App() {
 
   const showUserManagement = user.role === 'manager' || user.role === 'admin'
   const showAuditLog = user.role === 'manager' || user.role === 'admin'
-  const showBulkUpload = user.role === 'manager' || user.role === 'admin'   // <-- NEW
+  const showBulkUpload = user.role === 'manager' || user.role === 'admin'
 
   return (
     <div style={{ position: 'relative', minHeight: '100vh' }}>
@@ -104,9 +105,10 @@ function App() {
               <button onClick={() => setView('dashboard')}>Dashboard</button>
               <button onClick={() => setView('broadcasts')}>Broadcasts</button>
               <button onClick={() => setView('messages')}>Messages</button>
+              <button onClick={() => setView('customers')}>Customers</button>     {/* NEW Customers tab for everyone */}
               {showUserManagement && <button onClick={() => setView('users')}>User Management</button>}
               {showAuditLog && <button onClick={() => setView('audit')}>Audit Log</button>}
-              {showBulkUpload && <button onClick={() => setView('bulk')}>Bulk Upload</button>}   {/* NEW BUTTON */}
+              {showBulkUpload && <button onClick={() => setView('bulk')}>Bulk Upload</button>}
             </div>
           </div>
           <div className="user-area">
@@ -126,9 +128,10 @@ function App() {
               <SendPrivateMessage user={user} /> : 
               <PrivateMessageInbox user={user} />
           )}
+          {view === 'customers' && <CustomersList user={user} />}     {/* NEW view */}
           {view === 'users' && <UserManagement user={user} />}
           {view === 'audit' && <AuditLog />}
-          {view === 'bulk' && <BulkUpload user={user} />}   {/* NEW RENDER */}
+          {view === 'bulk' && <BulkUpload user={user} />}
         </div>
       </div>
     </div>
