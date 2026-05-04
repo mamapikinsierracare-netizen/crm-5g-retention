@@ -10,6 +10,7 @@ import PrivateMessageInbox from './PrivateMessageInbox'
 import AuditLog from './AuditLog'
 import UserManagement from './UserManagement'
 import NotificationsCenter from './NotificationsCenter'
+import BulkUpload from './BulkUpload'           // <-- NEW IMPORT
 import { supabase } from './supabase'
 
 // Import logo from src/assets
@@ -19,14 +20,12 @@ function App() {
   const [user, setUser] = useState(null)
   const [view, setView] = useState('dashboard')
   
-  // Theme state: load from localStorage or system preference
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem('theme')
     if (saved) return saved
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
   })
 
-  // Apply theme to HTML element and store preference
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
     localStorage.setItem('theme', theme)
@@ -58,14 +57,12 @@ function App() {
     setUser(null)
     setView('dashboard')
   }
-
   const toggleTheme = () => {
     setTheme(prev => prev === 'light' ? 'dark' : 'light')
   }
 
   if (!user) return <Login onLogin={handleLogin} />
 
-  // Choose dashboard based on role
   let DashboardComponent
   if (user.role === 'finance') {
     DashboardComponent = FinanceDashboard
@@ -79,10 +76,11 @@ function App() {
 
   const showUserManagement = user.role === 'manager' || user.role === 'admin'
   const showAuditLog = user.role === 'manager' || user.role === 'admin'
+  const showBulkUpload = user.role === 'manager' || user.role === 'admin'   // <-- NEW
 
   return (
     <div style={{ position: 'relative', minHeight: '100vh' }}>
-      {/* Watermark: fixed background with faint logo */}
+      {/* Watermark */}
       <div style={{
         position: 'fixed',
         top: 0,
@@ -98,23 +96,17 @@ function App() {
         pointerEvents: 'none',
       }} />
       
-      {/* Main content wrapper with higher z-index */}
       <div style={{ position: 'relative', zIndex: 1 }}>
-        {/* Professional header using CSS classes */}
         <header className="app-header">
           <div className="logo-area">
-            <img
-              src={companyLogo}
-              alt="Company Logo"
-              className="logo-img"
-              onClick={() => setView('dashboard')}
-            />
+            <img src={companyLogo} alt="Company Logo" className="logo-img" onClick={() => setView('dashboard')} />
             <div className="nav-buttons">
               <button onClick={() => setView('dashboard')}>Dashboard</button>
               <button onClick={() => setView('broadcasts')}>Broadcasts</button>
               <button onClick={() => setView('messages')}>Messages</button>
               {showUserManagement && <button onClick={() => setView('users')}>User Management</button>}
               {showAuditLog && <button onClick={() => setView('audit')}>Audit Log</button>}
+              {showBulkUpload && <button onClick={() => setView('bulk')}>Bulk Upload</button>}   {/* NEW BUTTON */}
             </div>
           </div>
           <div className="user-area">
@@ -136,6 +128,7 @@ function App() {
           )}
           {view === 'users' && <UserManagement user={user} />}
           {view === 'audit' && <AuditLog />}
+          {view === 'bulk' && <BulkUpload user={user} />}   {/* NEW RENDER */}
         </div>
       </div>
     </div>
