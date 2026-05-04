@@ -20,9 +20,7 @@ function parseDate(dateStr) {
   else return null
   if (parts.length !== 3) return null
   let [day, month, year] = parts
-  // If year is two-digit, assume 20xx
   if (year.length === 2) year = '20' + year
-  // Validate numbers
   day = parseInt(day, 10)
   month = parseInt(month, 10)
   year = parseInt(year, 10)
@@ -30,7 +28,6 @@ function parseDate(dateStr) {
   if (month < 1 || month > 12) return null
   const daysInMonth = new Date(year, month, 0).getDate()
   if (day < 1 || day > daysInMonth) return null
-  // Return YYYY-MM-DD
   return `${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`
 }
 
@@ -38,11 +35,66 @@ export default function BulkUpload({ user }) {
   const [uploading, setUploading] = useState(false)
   const [progress, setProgress] = useState(0)
   const [result, setResult] = useState(null)
+  const [updateMode, setUpdateMode] = useState(true)      // NEW: toggle for upsert
+  const [backupData, setBackupData] = useState(null)      // NEW: store backup for undo
+
+  // Helper: fetch existing records for the given account IDs (for backup and to decide insert/update)
+  const fetchExistingRecords = async (accountIds) => {
+    if (!accountIds.length) return []
+    const { data, error } = await supabase
+      .from('clients')
+      .select('account_id, created_at, created_by')
+      .in('account_id', accountIds)
+    if (error) {
+      console.error('Failed to fetch existing records:', error)
+      return []
+    }
+    return data
+  }
+
+  // Create a full backup of all clients that will be updated (store whole objects)
+  const createBackup = async (accountIds) => {
+    if (!updateMode || accountIds.length === 0) return null
+    const { data, error } = await supabase
+      .from('clients')
+      .select('*')
+      .in('account_id', accountIds)
+    if (error) {
+      console.error('Backup failed:', error)
+      return null
+    }
+    return data
+  }
+
+  // Undo last bulk update (restore from backup)
+  const handleUndo = async () => {
+    if (!backupData || backupData.length === 0) {
+      alert('No backup to restore')
+      return
+    }
+    if (!confirm(`Restore ${backupData.length} records to their previous state? This cannot be undone.`)) return
+
+    setUploading(true)
+    let success = 0
+    let errors = 0
+    for (const client of backupData) {
+      const { error } = await supabase
+        .from('clients')
+        .update(client)
+        .eq('account_id', client.account_id)
+      if (error) errors++
+      else success++
+    }
+    alert(`Restored ${success} records, ${errors} failed`)
+    setBackupData(null)
+    setUploading(false)
+    // Force refresh of page to show restored data? Optional.
+    window.location.reload()
+  }
 
   const handleFileUpload = (event) => {
     const file = event.target.files[0]
     if (!file) return
-
     if (!file.name.endsWith('.csv')) {
       alert('Please upload a CSV file')
       return
@@ -51,6 +103,7 @@ export default function BulkUpload({ user }) {
     setUploading(true)
     setProgress(0)
     setResult(null)
+    setBackupData(null)
 
     Papa.parse(file, {
       header: true,
@@ -59,65 +112,143 @@ export default function BulkUpload({ user }) {
         const rows = results.data
         const totalRows = rows.length
         let inserted = 0
+        let updated = 0
         let errors = []
         let skippedMissing = 0
         let dateErrors = 0
 
-        const batchSize = 50
-        for (let i = 0; i < totalRows; i += batchSize) {
-          const batch = rows.slice(i, i + batchSize)
-          const clientsToUpsert = []
+        // First pass: collect all unique account IDs and build client objects
+        const clientMap = new Map() // account_id -> client object (with CSV data)
+        const allAccountIds = []
 
-          for (const row of batch) {
-            const accountId = row['Account ID'] || row.account_id
-            const name = row['Name'] || row.name
-            const contact = row['Phone/Contact'] || row.contact
-            if (!accountId || !name || !contact) {
-              skippedMissing++
-              continue
-            }
-
-            const rawDate = row['Installation Date'] || row.installation_date
-            const formattedDate = parseDate(rawDate)
-            if (rawDate && !formattedDate) {
-              dateErrors++
-              errors.push(`Row ${i+1}: Invalid date "${rawDate}"`)
-              // Skip this row? We'll still include the row without date
-            }
-
-            const client = {
-              account_id: accountId,
-              name: name,
-              contact: contact,
-              address: row['Address'] || row.address,
-              current_package: row['Service Tag/Package Type'] || row.current_package,
-              package_price: parseFloat(row['Price'] || row.package_price) || 0,
-              retention_agent: row['Retention Agent'] || row.retention_agent,
-              installation_date: formattedDate, // can be null
-              account_status: row['Account Status'] || row.account_status || 'active',
-              created_by: user.email,
-              created_at: new Date().toISOString(),
-              updated_by: user.email,
-              updated_at: new Date().toISOString(),
-            }
-            clientsToUpsert.push(client)
+        for (let i = 0; i < totalRows; i++) {
+          const row = rows[i]
+          const accountId = row['Account ID'] || row.account_id
+          const name = row['Name'] || row.name
+          const contact = row['Phone/Contact'] || row.contact
+          if (!accountId || !name || !contact) {
+            skippedMissing++
+            errors.push(`Row ${i+1}: Missing required field (Account ID, Name, or Contact)`)
+            continue
           }
 
-          if (clientsToUpsert.length > 0) {
-            const { error } = await supabase
-              .from('clients')
-              .upsert(clientsToUpsert, { onConflict: 'account_id' })
-            if (error) {
-              errors.push(`Batch error: ${error.message}`)
-            } else {
-              inserted += clientsToUpsert.length
-            }
+          const rawDate = row['Installation Date'] || row.installation_date
+          const formattedDate = parseDate(rawDate)
+          if (rawDate && !formattedDate) {
+            dateErrors++
+            errors.push(`Row ${i+1}: Invalid date "${rawDate}"`)
           }
 
-          setProgress(Math.round(((i + batchSize) / totalRows) * 100))
+          const client = {
+            account_id: accountId,
+            name: name,
+            contact: contact,
+            address: row['Address'] || row.address,
+            current_package: row['Service Tag/Package Type'] || row.current_package,
+            package_price: parseFloat(row['Price'] || row.package_price) || 0,
+            retention_agent: row['Retention Agent'] || row.retention_agent,
+            installation_date: formattedDate,
+            account_status: row['Account Status'] || row.account_status || 'active',
+            updated_by: user.email,
+            updated_at: new Date().toISOString(),
+          }
+          clientMap.set(accountId, client)
+          allAccountIds.push(accountId)
         }
 
-        setResult({ inserted, errors: errors.length, errorDetails: errors, skippedMissing, dateErrors })
+        if (clientMap.size === 0) {
+          setResult({ inserted: 0, updated: 0, errors: errors.length, errorDetails: errors, skippedMissing, dateErrors })
+          setUploading(false)
+          return
+        }
+
+        // If updateMode is true, fetch existing records to know which are new vs update,
+        // and create a backup of existing records that will be updated.
+        let existingIds = []
+        let backup = null
+        if (updateMode) {
+          const existingRecords = await fetchExistingRecords(allAccountIds)
+          existingIds = existingRecords.map(r => r.account_id)
+          // Create mapping of existing records (account_id -> { created_at, created_by })
+          const existingMeta = new Map()
+          existingRecords.forEach(rec => existingMeta.set(rec.account_id, { created_at: rec.created_at, created_by: rec.created_by }))
+
+          // For existing records, preserve created_at/created_by; for new ones, set them now.
+          for (const [accId, client] of clientMap.entries()) {
+            if (existingMeta.has(accId)) {
+              const meta = existingMeta.get(accId)
+              client.created_at = meta.created_at
+              client.created_by = meta.created_by
+            } else {
+              client.created_at = new Date().toISOString()
+              client.created_by = user.email
+            }
+          }
+
+          // Create full backup of existing records that will be updated
+          if (existingIds.length > 0) {
+            backup = await createBackup(existingIds)
+            if (backup) setBackupData(backup)
+          }
+        } else {
+          // Update mode OFF: only insert new records (ignore existing ones)
+          // Remove any client that already exists
+          const existingRecords = await fetchExistingRecords(allAccountIds)
+          const existingIdSet = new Set(existingRecords.map(r => r.account_id))
+          for (const accId of clientMap.keys()) {
+            if (existingIdSet.has(accId)) {
+              clientMap.delete(accId)
+              errors.push(`Account ${accId} already exists – skipped (update mode disabled)`)
+            } else {
+              const client = clientMap.get(accId)
+              client.created_at = new Date().toISOString()
+              client.created_by = user.email
+            }
+          }
+        }
+
+        // Prepare final list of clients to upsert
+        const clientsToUpsert = Array.from(clientMap.values())
+        if (clientsToUpsert.length === 0) {
+          setResult({ inserted: 0, updated: 0, errors: errors.length, errorDetails: errors, skippedMissing, dateErrors })
+          setUploading(false)
+          return
+        }
+
+        // Perform batch upsert (or insert-only if updateMode false)
+        const batchSize = 50
+        let totalInserted = 0
+        let totalUpdated = 0
+        for (let i = 0; i < clientsToUpsert.length; i += batchSize) {
+          const batch = clientsToUpsert.slice(i, i + batchSize)
+          const { error } = await supabase
+            .from('clients')
+            .upsert(batch, { onConflict: 'account_id', ignoreDuplicates: false })
+          if (error) {
+            errors.push(`Batch error: ${error.message}`)
+          } else {
+            if (updateMode) {
+              // With updateMode, count updates vs inserts
+              for (const client of batch) {
+                if (existingIds.includes(client.account_id)) totalUpdated++
+                else totalInserted++
+              }
+            } else {
+              totalInserted += batch.length
+            }
+          }
+          setProgress(Math.round(((i + batchSize) / clientsToUpsert.length) * 100))
+        }
+
+        setResult({
+          inserted: totalInserted,
+          updated: totalUpdated,
+          errors: errors.length,
+          errorDetails: errors,
+          skippedMissing,
+          dateErrors,
+          totalProcessed: clientsToUpsert.length
+        })
         setUploading(false)
       },
       error: (err) => {
@@ -136,11 +267,32 @@ export default function BulkUpload({ user }) {
         Account ID,Name,Phone/Contact,Address,Service Tag/Package Type,Price,Retention Agent,Installation Date,Account Status
       </pre>
       <p><strong>Date format:</strong> DD/MM/YYYY, DD-MM-YYYY, or YYYY-MM-DD. Invalid dates will be ignored (left empty).</p>
+
+      {/* NEW: Toggle for update mode and Undo button */}
+      <div style={{ margin: '1rem 0', display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <input
+            type="checkbox"
+            checked={updateMode}
+            onChange={(e) => setUpdateMode(e.target.checked)}
+            disabled={uploading}
+          />
+          <strong>Update existing accounts (by Account ID)</strong>
+        </label>
+        {backupData && backupData.length > 0 && (
+          <button onClick={handleUndo} className="btn-outline" style={{ backgroundColor: 'var(--warning)', color: '#000', border: 'none' }}>
+            🔄 Undo Last Bulk Update
+          </button>
+        )}
+      </div>
+
       <input type="file" accept=".csv" onChange={handleFileUpload} disabled={uploading} />
       {uploading && <p>Uploading... {progress}% completed</p>}
+
       {result && (
         <div style={{ marginTop: '1rem' }}>
-          <p><strong>Successfully inserted/updated:</strong> {result.inserted}</p>
+          <p><strong>Successfully inserted:</strong> {result.inserted}</p>
+          <p><strong>Successfully updated:</strong> {result.updated}</p>
           <p><strong>Rows skipped (missing required fields):</strong> {result.skippedMissing}</p>
           <p><strong>Rows with invalid dates:</strong> {result.dateErrors}</p>
           <p><strong>Other errors:</strong> {result.errors}</p>
