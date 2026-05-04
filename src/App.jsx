@@ -12,9 +12,25 @@ import UserManagement from './UserManagement'
 import NotificationsCenter from './NotificationsCenter'
 import { supabase } from './supabase'
 
+// Import logo from src/assets
+import companyLogo from './assets/one.jpg'
+
 function App() {
   const [user, setUser] = useState(null)
   const [view, setView] = useState('dashboard')
+  
+  // Theme state: load from localStorage or system preference
+  const [theme, setTheme] = useState(() => {
+    const saved = localStorage.getItem('theme')
+    if (saved) return saved
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  })
+
+  // Apply theme to HTML element and store preference
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+    localStorage.setItem('theme', theme)
+  }, [theme])
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -43,6 +59,10 @@ function App() {
     setView('dashboard')
   }
 
+  const toggleTheme = () => {
+    setTheme(prev => prev === 'light' ? 'dark' : 'light')
+  }
+
   if (!user) return <Login onLogin={handleLogin} />
 
   // Choose dashboard based on role
@@ -61,31 +81,62 @@ function App() {
   const showAuditLog = user.role === 'manager' || user.role === 'admin'
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #ccc', padding: '10px' }}>
-        <div>
-          <button onClick={() => setView('dashboard')} style={{ marginRight: '10px' }}>Dashboard</button>
-          <button onClick={() => setView('broadcasts')} style={{ marginRight: '10px' }}>Broadcasts</button>
-          <button onClick={() => setView('messages')} style={{ marginRight: '10px' }}>Messages</button>
-          {showUserManagement && <button onClick={() => setView('users')} style={{ marginRight: '10px' }}>User Management</button>}
-          {showAuditLog && <button onClick={() => setView('audit')}>Audit Log</button>}
+    <div style={{ position: 'relative', minHeight: '100vh' }}>
+      {/* Watermark: fixed background with faint logo */}
+      <div style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundImage: `url(${companyLogo})`,
+        backgroundRepeat: 'repeat',
+        backgroundSize: '200px',
+        backgroundPosition: 'center',
+        opacity: 0.06,
+        zIndex: 0,
+        pointerEvents: 'none',
+      }} />
+      
+      {/* Main content wrapper with higher z-index */}
+      <div style={{ position: 'relative', zIndex: 1 }}>
+        {/* Professional header using CSS classes */}
+        <header className="app-header">
+          <div className="logo-area">
+            <img
+              src={companyLogo}
+              alt="Company Logo"
+              className="logo-img"
+              onClick={() => setView('dashboard')}
+            />
+            <div className="nav-buttons">
+              <button onClick={() => setView('dashboard')}>Dashboard</button>
+              <button onClick={() => setView('broadcasts')}>Broadcasts</button>
+              <button onClick={() => setView('messages')}>Messages</button>
+              {showUserManagement && <button onClick={() => setView('users')}>User Management</button>}
+              {showAuditLog && <button onClick={() => setView('audit')}>Audit Log</button>}
+            </div>
+          </div>
+          <div className="user-area">
+            <span className="user-badge">{user.email} ({user.role})</span>
+            <button onClick={toggleTheme} className="btn-outline btn-sm">
+              {theme === 'light' ? '🌙 Dark' : '☀️ Light'}
+            </button>
+            <NotificationsCenter user={user} />
+            <button onClick={handleLogout}>Logout</button>
+          </div>
+        </header>
+        <div style={{ padding: '1.5rem' }}>
+          {view === 'dashboard' && <DashboardComponent user={user} />}
+          {view === 'broadcasts' && <Broadcasts user={user} />}
+          {view === 'messages' && (
+            user.role === 'agent' ? 
+              <SendPrivateMessage user={user} /> : 
+              <PrivateMessageInbox user={user} />
+          )}
+          {view === 'users' && <UserManagement user={user} />}
+          {view === 'audit' && <AuditLog />}
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-          <span>{user.email} ({user.role})</span>
-          <NotificationsCenter user={user} />
-          <button onClick={handleLogout}>Logout</button>
-        </div>
-      </div>
-      <div style={{ padding: '20px' }}>
-        {view === 'dashboard' && <DashboardComponent user={user} />}
-        {view === 'broadcasts' && <Broadcasts user={user} />}
-        {view === 'messages' && (
-          user.role === 'agent' ? 
-            <SendPrivateMessage user={user} /> : 
-            <PrivateMessageInbox user={user} />
-        )}
-        {view === 'users' && <UserManagement user={user} />}
-        {view === 'audit' && <AuditLog />}
       </div>
     </div>
   )

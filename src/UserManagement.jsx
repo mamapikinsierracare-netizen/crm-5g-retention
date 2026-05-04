@@ -5,8 +5,6 @@ export default function UserManagement({ user: currentUser }) {
   const [users, setUsers] = useState([])
   const [loading, setLoading] = useState(true)
   const [editingUserId, setEditingUserId] = useState(null)
-  const [form, setForm] = useState({ email: '', role: 'agent', full_name: '', team: '' })
-  const [showAddForm, setShowAddForm] = useState(false)
 
   const fetchUsers = async () => {
     setLoading(true)
@@ -18,17 +16,6 @@ export default function UserManagement({ user: currentUser }) {
   useEffect(() => {
     fetchUsers()
   }, [])
-
-  const handleCreateUser = async (e) => {
-    e.preventDefault()
-    // Create user in auth first (using admin function) – requires service role, but we cannot from client.
-    // Alternative: create via Supabase Admin API? Not from client.
-    // Simpler: we will only allow manager to update roles of existing users, not create new auth users from UI.
-    // For full user creation, use Supabase dashboard or we can create a cloud function later.
-    // For now, we implement role update and delete only.
-    alert('User creation from UI requires additional backend setup. Use Supabase Auth panel to add new users, then assign role here.')
-    setShowAddForm(false)
-  }
 
   const handleUpdateRole = async (userId, newRole) => {
     const { error } = await supabase.from('users').update({ role: newRole }).eq('email', userId)
@@ -50,42 +37,60 @@ export default function UserManagement({ user: currentUser }) {
   return (
     <div>
       <h2>User Management</h2>
-      <button onClick={() => setShowAddForm(!showAddForm)}>+ Add User (manual)</button>
-      {showAddForm && (
-        <form onSubmit={handleCreateUser} style={{ border: '1px solid #ccc', padding: '15px', marginBottom: '20px' }}>
-          <p><strong>Note:</strong> This form only adds to the users table. The user must already exist in Authentication.</p>
-          <div><label>Email:</label><input type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} required /></div>
-          <div><label>Role:</label><select value={form.role} onChange={e => setForm({...form, role: e.target.value})}><option>agent</option><option>supervisor</option><option>manager</option><option>finance</option><option>admin</option></select></div>
-          <div><label>Full Name:</label><input value={form.full_name} onChange={e => setForm({...form, full_name: e.target.value})} /></div>
-          <div><label>Team:</label><input value={form.team} onChange={e => setForm({...form, team: e.target.value})} /></div>
-          <button type="submit">Add</button>
-        </form>
-      )}
+      <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
+        <button
+          onClick={() => window.open('https://supabase.com/dashboard/project/jlpztcesjnikrjyjjauu/auth/users', '_blank')}
+        >
+          Open Supabase Auth Panel (Create User)
+        </button>
+        <button onClick={fetchUsers}>Refresh Users</button>
+      </div>
+      <p style={{ marginBottom: '15px', color: '#555' }}>
+        <strong>Note:</strong> After creating a user in the Auth panel, click <strong>Refresh Users</strong> and then assign a role using the "Edit Role" button below.
+      </p>
 
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead style={{ background: '#f0f0f0' }}>
-          <tr><th>Email</th><th>Role</th><th>Full Name</th><th>Team</th><th>Actions</th></tr>
+          <tr>
+            <th style={{ padding: '8px', textAlign: 'left' }}>Email</th>
+            <th style={{ padding: '8px', textAlign: 'left' }}>Role</th>
+            <th style={{ padding: '8px', textAlign: 'left' }}>Full Name</th>
+            <th style={{ padding: '8px', textAlign: 'left' }}>Team</th>
+            <th style={{ padding: '8px', textAlign: 'left' }}>Actions</th>
+          </tr>
         </thead>
         <tbody>
           {users.map(u => (
             <tr key={u.email}>
-              <td>{u.email}</td>
-              <td>
+              <td style={{ padding: '8px' }}>{u.email}</td>
+              <td style={{ padding: '8px' }}>
                 {editingUserId === u.email ? (
-                  <select value={u.role} onChange={e => handleUpdateRole(u.email, e.target.value)}>
-                    <option>agent</option><option>supervisor</option><option>manager</option><option>finance</option><option>admin</option>
+                  <select
+                    value={u.role}
+                    onChange={e => handleUpdateRole(u.email, e.target.value)}
+                    style={{ padding: '4px' }}
+                  >
+                    <option>agent</option>
+                    <option>supervisor</option>
+                    <option>manager</option>
+                    <option>finance</option>
+                    <option>admin</option>
                   </select>
-                ) : u.role}
+                ) : (
+                  u.role
+                )}
               </td>
-              <td>{u.full_name}</td>
-              <td>{u.team}</td>
-              <td>
+              <td style={{ padding: '8px' }}>{u.full_name}</td>
+              <td style={{ padding: '8px' }}>{u.team}</td>
+              <td style={{ padding: '8px' }}>
                 {editingUserId === u.email ? (
                   <button onClick={() => setEditingUserId(null)}>Cancel</button>
                 ) : (
                   <button onClick={() => setEditingUserId(u.email)}>Edit Role</button>
                 )}
-                <button onClick={() => handleDeleteUser(u.email)} style={{ marginLeft: '5px', color: 'red' }}>Delete</button>
+                <button onClick={() => handleDeleteUser(u.email)} style={{ marginLeft: '5px', color: 'red' }}>
+                  Delete
+                </button>
               </td>
             </tr>
           ))}

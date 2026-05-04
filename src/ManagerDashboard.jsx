@@ -22,7 +22,7 @@ export default function ManagerDashboard() {
       // Active clients (not soft-deleted)
       const { count: activeClients } = await supabase.from('clients').select('*', { count: 'exact', head: true }).is('deleted_at', null)
 
-      // Churn rate: (clients who have call outcome "No longer using our service" in last 30 days) / total active
+      // Churn rate
       const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString()
       const { data: churned } = await supabase
         .from('call_activities')
@@ -32,7 +32,7 @@ export default function ManagerDashboard() {
       const uniqueChurned = new Set(churned?.map(c => c.client_account_id)).size
       const churnRate = activeClients ? (uniqueChurned / activeClients) * 100 : 0
 
-      // Winback conversion rate: (Paid response_outcome) / total Winback calls
+      // Winback conversion rate
       const { data: winbacks } = await supabase
         .from('call_activities')
         .select('response_outcome')
@@ -50,7 +50,7 @@ export default function ManagerDashboard() {
         .gte('call_time', firstDayOfMonth)
       const revenueThisMonth = paidThisMonth?.reduce((sum, p) => sum + (p.package_price_at_time || 0), 0) || 0
 
-      // Average LTV as average package_price * 12 (rough)
+      // Average LTV
       const { data: clientsWithPrice } = await supabase.from('clients').select('package_price')
       const avgPrice = clientsWithPrice?.reduce((sum, c) => sum + (c.package_price || 0), 0) / (clientsWithPrice?.length || 1)
       const ltv = avgPrice * 12
@@ -71,7 +71,7 @@ export default function ManagerDashboard() {
         avgCallsPerAgent: avgCallsPerAgent.toFixed(1),
       })
 
-      // Agent performance (similar to leaderboard)
+      // Agent performance (leaderboard)
       const { data: allCalls } = await supabase.from('call_activities').select('agent_email, response_outcome, package_price_at_time')
       const agentMap = new Map()
       allCalls?.forEach(call => {
@@ -86,7 +86,7 @@ export default function ManagerDashboard() {
       agentArray.sort((a, b) => b.wins - a.wins)
       setAgentPerformance(agentArray.slice(0, 10))
 
-      // Daily calls last 7 days trend
+      // Daily calls last 7 days
       const last7Days = []
       for (let i = 6; i >= 0; i--) {
         const date = new Date()
@@ -94,7 +94,8 @@ export default function ManagerDashboard() {
         const start = date.toISOString().slice(0, 10)
         const end = new Date(date.getTime() + 86400000).toISOString().slice(0, 10)
         const { count } = await supabase.from('call_activities').select('*', { count: 'exact', head: true }).gte('call_time', start).lt('call_time', end)
-        last7Days.push({ date: start, calls: count || 0 })
+        const maxCalls = 10 // for bar scaling
+        last7Days.push({ date: start, day: start.slice(5), calls: count || 0, barWidth: Math.min(100, (count / maxCalls) * 100) })
       }
       setRecentTrend(last7Days)
 
@@ -105,43 +106,72 @@ export default function ManagerDashboard() {
 
   if (loading) return <div>Loading manager dashboard...</div>
 
+  const maxCalls = Math.max(...recentTrend.map(d => d.calls), 1)
+
   return (
     <div>
-      <h2>Manager Dashboard – Key Performance Indicators</h2>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px,1fr))', gap: '15px', marginBottom: '30px' }}>
-        <div style={{ border: '1px solid #ccc', padding: '15px', borderRadius: '8px', background: '#f9f9f9' }}><strong>Total Clients</strong><br />{kpis.totalClients}</div>
-        <div style={{ border: '1px solid #ccc', padding: '15px', borderRadius: '8px', background: '#f9f9f9' }}><strong>Active Clients</strong><br />{kpis.activeClients}</div>
-        <div style={{ border: '1px solid #ccc', padding: '15px', borderRadius: '8px', background: '#f9f9f9' }}><strong>Churn Rate (30d)</strong><br />{kpis.churnRate}%</div>
-        <div style={{ border: '1px solid #ccc', padding: '15px', borderRadius: '8px', background: '#f9f9f9' }}><strong>Winback Conversion</strong><br />{kpis.winbackConversionRate}%</div>
-        <div style={{ border: '1px solid #ccc', padding: '15px', borderRadius: '8px', background: '#f9f9f9' }}><strong>Revenue This Month</strong><br />${kpis.revenueThisMonth}</div>
-        <div style={{ border: '1px solid #ccc', padding: '15px', borderRadius: '8px', background: '#f9f9f9' }}><strong>Avg LTV</strong><br />${kpis.ltv}</div>
-        <div style={{ border: '1px solid #ccc', padding: '15px', borderRadius: '8px', background: '#f9f9f9' }}><strong>Avg Calls per Agent</strong><br />{kpis.avgCallsPerAgent}</div>
+      <h2 style={{ marginBottom: '1rem' }}>Manager Dashboard – Key Performance Indicators</h2>
+
+      {/* Stats grid – using your CSS classes */}
+      <div className="stats-grid">
+        <div className="stat-card"><div className="stat-number">{kpis.totalClients}</div><div className="stat-label">Total Clients</div></div>
+        <div className="stat-card"><div className="stat-number">{kpis.activeClients}</div><div className="stat-label">Active Clients</div></div>
+        <div className="stat-card"><div className="stat-number">{kpis.churnRate}%</div><div className="stat-label">Churn Rate (30d)</div></div>
+        <div className="stat-card"><div className="stat-number">{kpis.winbackConversionRate}%</div><div className="stat-label">Winback Conversion</div></div>
+        <div className="stat-card"><div className="stat-number">${kpis.revenueThisMonth.toLocaleString()}</div><div className="stat-label">Revenue This Month</div></div>
+        <div className="stat-card"><div className="stat-number">${Number(kpis.ltv).toLocaleString()}</div><div className="stat-label">Avg LTV</div></div>
+        <div className="stat-card"><div className="stat-number">{kpis.avgCallsPerAgent}</div><div className="stat-label">Avg Calls/Agent</div></div>
       </div>
 
-      <h3>Daily Call Trend (Last 7 days)</h3>
-      <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end', marginBottom: '30px' }}>
-        {recentTrend.map(day => (
-          <div key={day.date} style={{ textAlign: 'center', flex: 1 }}>
-            <div style={{ backgroundColor: '#007bff', height: `${day.calls * 5}px`, minHeight: '5px', width: '100%', borderRadius: '4px' }} title={`${day.calls} calls`}></div>
-            <div style={{ fontSize: '12px' }}>{day.date.slice(5)}</div>
-            <div style={{ fontSize: '12px' }}>{day.calls}</div>
-          </div>
-        ))}
-      </div>
-
-      <h3>Top Agent Performance (by Successful Winbacks)</h3>
-      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-        <thead style={{ background: '#f0f0f0' }}>
-          <tr><th>Agent</th><th>Successful Winbacks</th><th>Revenue Generated</th></tr>
-        </thead>
-        <tbody>
-          {agentPerformance.map(agent => (
-            <tr key={agent.email} style={{ borderBottom: '1px solid #ddd' }}>
-              <td>{agent.email}</td><td>{agent.wins}</td><td>${agent.revenue}</td>
-            </tr>
+      {/* Daily Call Trend – Modern bar chart */}
+      <div className="card" style={{ marginBottom: '2rem' }}>
+        <h3 style={{ marginBottom: '1rem' }}>Daily Call Trend (Last 7 days)</h3>
+        <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-end', justifyContent: 'space-around', flexWrap: 'wrap' }}>
+          {recentTrend.map(day => (
+            <div key={day.date} style={{ textAlign: 'center', flex: 1, minWidth: '60px' }}>
+              <div style={{
+                backgroundColor: 'var(--primary)',
+                height: `${(day.calls / maxCalls) * 120}px`,
+                width: '40px',
+                margin: '0 auto',
+                borderRadius: '8px 8px 4px 4px',
+                transition: 'height 0.3s',
+              }} />
+              <div style={{ marginTop: '8px', fontWeight: '500', fontSize: '0.8rem' }}>{day.day}</div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{day.calls} calls</div>
+            </div>
           ))}
-        </tbody>
-      </table>
+        </div>
+      </div>
+
+      {/* Top Agent Performance Table */}
+      <div className="table-container">
+        <h3 style={{ padding: '1rem 1rem 0 1rem' }}>Top Agent Performance (by Successful Winbacks)</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Agent</th>
+              <th>Successful Winbacks</th>
+              <th>Revenue Generated</th>
+            </tr>
+          </thead>
+          <tbody>
+            {agentPerformance.length === 0 ? (
+              <tr>
+                <td colSpan="3" style={{ textAlign: 'center', padding: '2rem' }}>No winback data yet</td>
+              </tr>
+            ) : (
+              agentPerformance.map(agent => (
+                <tr key={agent.email}>
+                  <td>{agent.email}</td>
+                  <td>{agent.wins}</td>
+                  <td>${agent.revenue.toLocaleString()}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }
