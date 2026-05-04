@@ -107,6 +107,7 @@ export default function AgentDashboard({ user }) {
 
   // Fetch KPIs on mount and when user changes
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchKPIs()
   }, [user])
 
@@ -239,7 +240,9 @@ export default function AgentDashboard({ user }) {
             <div><strong>Name:</strong> {selectedClient.name}</div>
             <div><strong>Contact:</strong> {selectedClient.contact}</div>
             <div><strong>Address:</strong> {selectedClient.address || '-'}</div>
-            <div><strong>Package:</strong> {selectedClient.current_package} - ${selectedClient.package_price}</div>
+            <div><strong>Package:</strong> {selectedClient.current_package} - USD ${selectedClient.package_price} 
+  {selectedClient.package_price_nle && ` (≈ NLe ${selectedClient.package_price_nle.toFixed(2)})`}
+</div>
             <div><strong>Retention Agent:</strong> {selectedClient.retention_agent || '-'}</div>
             <div><strong>Installation Date:</strong> {selectedClient.installation_date || '-'}</div>
             <div><strong>Account Status:</strong> {selectedClient.account_status || 'active'}</div>
