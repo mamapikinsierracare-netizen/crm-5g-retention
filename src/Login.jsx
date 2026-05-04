@@ -6,6 +6,9 @@ export default function Login({ onLogin }) {
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [mfaRequired, setMfaRequired] = useState(false)
+  const [mfaCode, setMfaCode] = useState('')
+  const [factorId, setFactorId] = useState(null)
 
   const handleLogin = async (e) => {
     e.preventDefault()
@@ -13,34 +16,84 @@ export default function Login({ onLogin }) {
     setError(null)
 
     try {
-      // Sign in with Supabase
       const { data, error } = await supabase.auth.signInWithPassword({
         email: email,
         password: password,
       })
-
       if (error) throw error
 
-      if (data?.session?.user) {
-        // Fetch user's role from users table
-        const { data: userData, error: roleError } = await supabase
-          .from('users')
-          .select('role')
-          .eq('email', data.session.user.email)
-          .single()
+      const { data: factors } = await supabase.auth.mfa.listFactors()
+      const verifiedFactor = factors.totp.find(f => f.status === 'verified')
 
-        if (roleError) console.error('Role fetch error:', roleError)
-
-        onLogin({
-          email: data.session.user.email,
-          role: userData?.role || 'agent',
-        })
+      if (verifiedFactor) {
+        setFactorId(verifiedFactor.id)
+        setMfaRequired(true)
+        setLoading(false)
+        return
       }
+
+      completeLogin(data.session.user.email)
     } catch (err) {
       setError(err.message)
-    } finally {
       setLoading(false)
     }
+  }
+
+  const verifyMFA = async () => {
+    if (!mfaCode || mfaCode.length !== 6) {
+      setError('Please enter a valid 6-digit code')
+      return
+    }
+    setLoading(true)
+    try {
+      const { error } = await supabase.auth.mfa.verify({
+        factorId,
+        code: mfaCode,
+      })
+      if (error) throw error
+      const { data: { session } } = await supabase.auth.getSession()
+      completeLogin(session.user.email)
+    } catch (err) {
+      setError(err.message)
+      setLoading(false)
+    }
+  }
+
+  const completeLogin = async (userEmail) => {
+    const { data: userData, error: roleError } = await supabase
+      .from('users')
+      .select('role')
+      .eq('email', userEmail)
+      .single()
+    if (roleError) console.error('Role fetch error:', roleError)
+    onLogin({
+      email: userEmail,
+      role: userData?.role || 'agent',
+    })
+  }
+
+  if (mfaRequired) {
+    return (
+      <div style={{ maxWidth: '400px', margin: '100px auto', padding: '20px', border: '1px solid #ccc', borderRadius: '8px' }}>
+        <h2>Two-Factor Authentication</h2>
+        <p>Enter the 6‑digit code from your authenticator app.</p>
+        {error && <p style={{ color: 'red' }}>{error}</p>}
+        <div style={{ marginBottom: '15px' }}>
+          <label>Verification code:</label><br />
+          <input
+            type="text"
+            inputMode="numeric"
+            maxLength="6"
+            value={mfaCode}
+            onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, ''))}
+            style={{ width: '100%', padding: '8px', marginTop: '5px' }}
+          />
+        </div>
+        <button onClick={verifyMFA} disabled={loading}>
+          {loading ? 'Verifying...' : 'Verify'}
+        </button>
+      </div>
+    )
   }
 
   return (
