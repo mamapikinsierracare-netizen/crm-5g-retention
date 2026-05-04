@@ -508,3 +508,36 @@ tr:hover td {
     min-width: 60px;
   }
 }
+/* Status badges for Customers table */
+.status-badge {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  border-radius: 20px;
+  font-size: 0.7rem;
+  font-weight: 500;
+  text-transform: capitalize;
+}
+.status-active {
+  background: #d1fae5;
+  color: #065f46;
+}
+.status-disabled {
+  background: #fee2e2;
+  color: #991b1b;
+}
+.status-deleted {
+  background: #f3f4f6;
+  color: #4b5563;
+}
+[data-theme="dark"] .status-active {
+  background: #064e3b;
+  color: #a7f3d0;
+}
+[data-theme="dark"] .status-disabled {
+  background: #7f1a1a;
+  color: #fecaca;
+}
+[data-theme="dark"] .status-deleted {
+  background: #374151;
+  color: #d1d5db;
+}
