@@ -11,10 +11,8 @@ import AuditLog from './AuditLog'
 import UserManagement from './UserManagement'
 import NotificationsCenter from './NotificationsCenter'
 import BulkUpload from './BulkUpload'
-import CustomersList from './CustomersList'           // NEW import for Customers tab
+import CustomersList from './CustomersList'
 import { supabase } from './supabase'
-
-// Import logo from src/assets
 import companyLogo from './assets/one.jpg'
 
 function App() {
@@ -76,7 +74,8 @@ function App() {
   }
 
   const showUserManagement = user.role === 'manager' || user.role === 'admin'
-  const showAuditLog = user.role === 'manager' || user.role === 'admin'
+  // 🟢 CHANGE: Allow agents to see the Audit Log button (RLS will filter data)
+  const showAuditLog = user.role === 'manager' || user.role === 'admin' || user.role === 'agent'
   const showBulkUpload = user.role === 'manager' || user.role === 'admin'
 
   return (
@@ -105,7 +104,7 @@ function App() {
               <button onClick={() => setView('dashboard')}>Dashboard</button>
               <button onClick={() => setView('broadcasts')}>Broadcasts</button>
               <button onClick={() => setView('messages')}>Messages</button>
-              <button onClick={() => setView('customers')}>Customers</button>     {/* NEW Customers tab for everyone */}
+              <button onClick={() => setView('customers')}>Customers</button>
               {showUserManagement && <button onClick={() => setView('users')}>User Management</button>}
               {showAuditLog && <button onClick={() => setView('audit')}>Audit Log</button>}
               {showBulkUpload && <button onClick={() => setView('bulk')}>Bulk Upload</button>}
@@ -128,9 +127,9 @@ function App() {
               <SendPrivateMessage user={user} /> : 
               <PrivateMessageInbox user={user} />
           )}
-          {view === 'customers' && <CustomersList user={user} />}     {/* NEW view */}
+          {view === 'customers' && <CustomersList user={user} />}
           {view === 'users' && <UserManagement user={user} />}
-          {view === 'audit' && <AuditLog />}
+          {view === 'audit' && <AuditLog user={user} />}   {/* Pass user prop for any role-based UI inside */}
           {view === 'bulk' && <BulkUpload user={user} />}
         </div>
       </div>
