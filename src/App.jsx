@@ -15,6 +15,7 @@ import CustomersList from './CustomersList'
 import { supabase } from './supabase'
 import companyLogo from './assets/one.jpg'
 import ConversionSettings from './components/ConversionSettings'
+import BackupManager from './components/BackupManager'   // NEW
 
 function App() {
   const [user, setUser] = useState(null)
@@ -77,8 +78,8 @@ function App() {
   const showUserManagement = user.role === 'manager' || user.role === 'admin'
   const showAuditLog = user.role === 'manager' || user.role === 'admin' || user.role === 'agent'
   const showBulkUpload = user.role === 'manager' || user.role === 'admin'
-  // NEW: Show Conversion tab for finance, manager, admin
   const showConversion = user.role === 'finance' || user.role === 'manager' || user.role === 'admin'
+  const showBackup = user.role === 'manager' || user.role === 'admin'   // NEW
 
   return (
     <div style={{ position: 'relative', minHeight: '100vh' }}>
@@ -110,8 +111,8 @@ function App() {
               {showUserManagement && <button onClick={() => setView('users')}>User Management</button>}
               {showAuditLog && <button onClick={() => setView('audit')}>Audit Log</button>}
               {showBulkUpload && <button onClick={() => setView('bulk')}>Bulk Upload</button>}
-              {/* NEW Conversion button */}
               {showConversion && <button onClick={() => setView('conversion')}>Conversion</button>}
+              {showBackup && <button onClick={() => setView('backup')}>Backup</button>}   {/* NEW */}
             </div>
           </div>
           <div className="user-area">
@@ -135,8 +136,8 @@ function App() {
           {view === 'users' && <UserManagement user={user} />}
           {view === 'audit' && <AuditLog user={user} />}
           {view === 'bulk' && <BulkUpload user={user} />}
-          {/* NEW Conversion view */}
           {view === 'conversion' && <ConversionSettings user={user} />}
+          {view === 'backup' && <BackupManager user={user} />}   {/* NEW */}
         </div>
       </div>
     </div>
