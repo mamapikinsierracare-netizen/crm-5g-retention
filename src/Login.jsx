@@ -60,17 +60,18 @@ export default function Login({ onLogin }) {
   }
 
   const completeLogin = async (userEmail) => {
-    const { data: userData, error: roleError } = await supabase
-      .from('users')
-      .select('role')
-      .eq('email', userEmail)
-      .single()
-    if (roleError) console.error('Role fetch error:', roleError)
-    onLogin({
-      email: userEmail,
-      role: userData?.role || 'agent',
-    })
-  }
+  const { data: userData, error: roleError } = await supabase
+    .from('users')
+    .select('role, full_name')
+    .eq('email', userEmail)
+    .single()
+  if (roleError) console.error('User fetch error:', roleError)
+  onLogin({
+    email: userEmail,
+    role: userData?.role || 'agent',
+    full_name: userData?.full_name || userEmail.split('@')[0],
+  })
+}
 
   if (mfaRequired) {
     return (

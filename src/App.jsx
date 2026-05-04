@@ -44,9 +44,10 @@ function App() {
           .then(({ data }) => {
             if (data) {
               setUser({
-                email: session.user.email,
-                role: data.role,
-              })
+  email: session.user.email,
+  role: data.role,
+  full_name: data.full_name,
+})
             }
           })
       }
@@ -118,7 +119,7 @@ function App() {
             </div>
           </div>
           <div className="user-area">
-            <span className="user-badge">{user.email} ({user.role})</span>
+            <span className="user-badge">{user.full_name || user.email} ({user.role})</span>
             <button onClick={toggleTheme} className="btn-outline btn-sm">
               {theme === 'light' ? '🌙 Dark' : '☀️ Light'}
             </button>
