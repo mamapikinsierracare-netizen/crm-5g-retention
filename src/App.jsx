@@ -15,7 +15,7 @@ import CustomersList from './CustomersList'
 import { supabase } from './supabase'
 import companyLogo from './assets/one.jpg'
 import ConversionSettings from './components/ConversionSettings'
-import BackupManager from './components/BackupManager'   // NEW
+import BackupManager from './components/BackupManager'
 
 function App() {
   const [user, setUser] = useState(null)
@@ -79,7 +79,7 @@ function App() {
   const showAuditLog = user.role === 'manager' || user.role === 'admin' || user.role === 'agent'
   const showBulkUpload = user.role === 'manager' || user.role === 'admin'
   const showConversion = user.role === 'finance' || user.role === 'manager' || user.role === 'admin'
-  const showBackup = user.role === 'manager' || user.role === 'admin'   // NEW
+  const showBackup = user.role === 'manager' || user.role === 'admin'
 
   return (
     <div style={{ position: 'relative', minHeight: '100vh' }}>
@@ -112,7 +112,7 @@ function App() {
               {showAuditLog && <button onClick={() => setView('audit')}>Audit Log</button>}
               {showBulkUpload && <button onClick={() => setView('bulk')}>Bulk Upload</button>}
               {showConversion && <button onClick={() => setView('conversion')}>Conversion</button>}
-              {showBackup && <button onClick={() => setView('backup')}>Backup</button>}   {/* NEW */}
+              {showBackup && <button onClick={() => setView('backup')}>Backup</button>}
             </div>
           </div>
           <div className="user-area">
@@ -137,7 +137,7 @@ function App() {
           {view === 'audit' && <AuditLog user={user} />}
           {view === 'bulk' && <BulkUpload user={user} />}
           {view === 'conversion' && <ConversionSettings user={user} />}
-          {view === 'backup' && <BackupManager user={user} />}   {/* NEW */}
+          {view === 'backup' && <BackupManager user={user} />}
         </div>
       </div>
     </div>
