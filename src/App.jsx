@@ -16,6 +16,7 @@ import { supabase } from './supabase'
 import companyLogo from './assets/one.jpg'
 import ConversionSettings from './components/ConversionSettings'
 import BackupManager from './components/BackupManager'
+import TwoFactorSetup from './components/TwoFactorSetup'
 
 function App() {
   const [user, setUser] = useState(null)
@@ -80,10 +81,10 @@ function App() {
   const showBulkUpload = user.role === 'manager' || user.role === 'admin'
   const showConversion = user.role === 'finance' || user.role === 'manager' || user.role === 'admin'
   const showBackup = user.role === 'manager' || user.role === 'admin'
+  const show2FA = user.role === 'manager' || user.role === 'admin'
 
   return (
     <div style={{ position: 'relative', minHeight: '100vh' }}>
-      {/* Watermark */}
       <div style={{
         position: 'fixed',
         top: 0,
@@ -113,6 +114,7 @@ function App() {
               {showBulkUpload && <button onClick={() => setView('bulk')}>Bulk Upload</button>}
               {showConversion && <button onClick={() => setView('conversion')}>Conversion</button>}
               {showBackup && <button onClick={() => setView('backup')}>Backup</button>}
+              {show2FA && <button onClick={() => setView('2fa')}>2FA Setup</button>}
             </div>
           </div>
           <div className="user-area">
@@ -138,6 +140,7 @@ function App() {
           {view === 'bulk' && <BulkUpload user={user} />}
           {view === 'conversion' && <ConversionSettings user={user} />}
           {view === 'backup' && <BackupManager user={user} />}
+          {view === '2fa' && <TwoFactorSetup user={user} />}
         </div>
       </div>
     </div>
