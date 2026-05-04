@@ -5,27 +5,38 @@ import Papa from 'papaparse'
 export default function BulkUpload({ user }) {
   const [uploading, setUploading] = useState(false)
   const [result, setResult] = useState(null)
+  const [progress, setProgress] = useState(0)
 
   const handleFileUpload = (event) => {
     const file = event.target.files[0]
     if (!file) return
 
-    // Validate file type – only CSV
     if (!file.name.endsWith('.csv')) {
       alert('Please upload a CSV file (you can save Excel as CSV)')
       return
     }
 
     setUploading(true)
+    setProgress(0)
+    setResult(null)
+
     Papa.parse(file, {
       header: true,
       skipEmptyLines: true,
+      step: (results, parser) => {
+        // Optional: if you want to process row by row, but we'll do all at once
+      },
       complete: async (results) => {
         const data = results.data
         let inserted = 0, updated = 0, errors = []
+        const total = data.length
 
-        for (const row of data) {
-          // Map CSV columns to database fields (case‑insensitive, flexible)
+        for (let i = 0; i < data.length; i++) {
+          const row = data[i]
+          // Update progress
+          setProgress(Math.round((i / total) * 100))
+
+          // Map CSV columns to database fields
           const client = {
             account_id: row['Account ID'] || row.account_id,
             name: row['Name'] || row.name,
@@ -41,25 +52,30 @@ export default function BulkUpload({ user }) {
             created_at: new Date().toISOString(),
             created_by: user.email,
           }
+
           // Validate required fields
           if (!client.account_id || !client.name || !client.contact) {
-            errors.push(`Missing required fields for row: ${JSON.stringify(row)}`)
+            errors.push(`Row ${i+1}: Missing required fields (Account ID, Name, Phone)`)
             continue
           }
-          // Upsert (insert or update based on account_id)
+
+          // Upsert
           const { error } = await supabase
             .from('clients')
             .upsert(client, { onConflict: 'account_id' })
           if (error) {
-            errors.push(`Error for ${client.account_id}: ${error.message}`)
+            errors.push(`Row ${i+1} (${client.account_id}): ${error.message}`)
           } else {
             inserted++
           }
         }
+
         setResult({ inserted, updated, errors: errors.length, errorDetails: errors })
+        setProgress(100)
         setUploading(false)
       },
       error: (err) => {
+        console.error('PapaParse error:', err)
         alert('Parse error: ' + err.message)
         setUploading(false)
       }
@@ -82,7 +98,12 @@ export default function BulkUpload({ user }) {
         <li><strong>Account Status</strong> (active, disabled, deleted)</li>
       </ul>
       <input type="file" accept=".csv" onChange={handleFileUpload} disabled={uploading} />
-      {uploading && <p>Uploading and processing...</p>}
+      {uploading && (
+        <div style={{ marginTop: '1rem' }}>
+          <p>Processing... {progress}%</p>
+          <progress value={progress} max="100" style={{ width: '100%' }} />
+        </div>
+      )}
       {result && (
         <div style={{ marginTop: '1rem' }}>
           <p><strong>Inserted/Updated:</strong> {result.inserted}</p>
