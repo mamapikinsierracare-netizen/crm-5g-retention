@@ -1,51 +1,104 @@
 import { useEffect, useState } from 'react'
 import { supabase } from './supabase'
+import DateRangeFilter from './DateRangeFilter'
+
+function getDateRange(range) {
+  // same function as above (copy exactly)
+  const now = new Date()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const startOfWeek = new Date(today)
+  startOfWeek.setDate(today.getDate() - today.getDay() + (today.getDay() === 0 ? -6 : 1))
+  const endOfWeek = new Date(startOfWeek)
+  endOfWeek.setDate(startOfWeek.getDate() + 6)
+
+  switch (range) {
+    case 'Today':
+      return { start: today.toISOString(), end: new Date(today.getTime() + 86400000).toISOString() }
+    case 'This Week':
+      return { start: startOfWeek.toISOString(), end: new Date(endOfWeek.getTime() + 86400000).toISOString() }
+    case 'Last Week':
+      const lastWeekStart = new Date(startOfWeek)
+      lastWeekStart.setDate(startOfWeek.getDate() - 7)
+      const lastWeekEnd = new Date(lastWeekStart)
+      lastWeekEnd.setDate(lastWeekStart.getDate() + 6)
+      return { start: lastWeekStart.toISOString(), end: new Date(lastWeekEnd.getTime() + 86400000).toISOString() }
+    case 'This Month':
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
+      const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0)
+      return { start: monthStart.toISOString(), end: new Date(monthEnd.getTime() + 86400000).toISOString() }
+    case 'Last Month':
+      const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+      const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0)
+      return { start: lastMonthStart.toISOString(), end: new Date(lastMonthEnd.getTime() + 86400000).toISOString() }
+    case 'Last 3 Months':
+      const threeMonthsAgo = new Date(now)
+      threeMonthsAgo.setMonth(now.getMonth() - 3)
+      return { start: threeMonthsAgo.toISOString(), end: today.toISOString() }
+    case 'Last 6 Months':
+      const sixMonthsAgo = new Date(now)
+      sixMonthsAgo.setMonth(now.getMonth() - 6)
+      return { start: sixMonthsAgo.toISOString(), end: today.toISOString() }
+    case 'This Year':
+      const yearStart = new Date(now.getFullYear(), 0, 1)
+      return { start: yearStart.toISOString(), end: today.toISOString() }
+    case 'Past Years':
+      const pastYearsEnd = new Date(now.getFullYear(), 0, 1)
+      return { start: '1970-01-01T00:00:00Z', end: pastYearsEnd.toISOString() }
+    default:
+      return { start: today.toISOString(), end: new Date(today.getTime() + 86400000).toISOString() }
+  }
+}
 
 export default function SupervisorDashboard({ user }) {
-  const [teamStats, setTeamStats] = useState({ totalCallsToday: 0, winbackSuccessRate: 0, revenueToday: 0 })
+  const [range, setRange] = useState('Today')
+  const [kpis, setKpis] = useState({
+    totalCalls: 0,
+    successfulWinbacks: 0,
+    winbackConversionRate: 0,
+    revenue: 0,
+    uniqueClients: 0,
+    avgCallDuration: 0,
+  })
   const [leaderboard, setLeaderboard] = useState([])
+  const [trendData, setTrendData] = useState([])
   const [recentCalls, setRecentCalls] = useState([])
-  const [dailyTrend, setDailyTrend] = useState([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     const fetchData = async () => {
-      // 1. Total calls today
-      const today = new Date().toISOString().slice(0, 10)
-      const { count: totalCallsToday } = await supabase
-        .from('call_activities')
-        .select('*', { count: 'exact', head: true })
-        .gte('call_time', today)
+      setLoading(true)
+      const { start, end } = getDateRange(range)
 
-      // 2. Winback success rate
-      const { data: winbacks } = await supabase
+      const { data: calls, error } = await supabase
         .from('call_activities')
-        .select('response_outcome')
-        .eq('call_type', 'Winback')
-      const totalWinbacks = winbacks?.length || 0
-      const successfulWinbacks = winbacks?.filter(w => w.response_outcome === 'Paid').length || 0
-      const winbackSuccessRate = totalWinbacks ? (successfulWinbacks / totalWinbacks) * 100 : 0
+        .select('*, clients(name, account_id)')
+        .gte('call_time', start)
+        .lt('call_time', end)
 
-      // 3. Revenue today (paid calls today)
-      const { data: paidToday } = await supabase
-        .from('call_activities')
-        .select('package_price_at_time')
-        .eq('response_outcome', 'Paid')
-        .gte('call_time', today)
-      const revenueToday = paidToday?.reduce((sum, p) => sum + (p.package_price_at_time || 0), 0) || 0
+      if (error) {
+        console.error(error)
+        setLoading(false)
+        return
+      }
 
-      setTeamStats({
-        totalCallsToday: totalCallsToday || 0,
-        winbackSuccessRate: winbackSuccessRate.toFixed(1),
-        revenueToday,
-      })
+      const callsArray = calls || []
 
-      // 4. Agent leaderboard (successful winbacks & revenue)
-      const { data: allCalls } = await supabase
-        .from('call_activities')
-        .select('agent_email, response_outcome, package_price_at_time')
+      // KPIs
+      const totalCalls = callsArray.length
+      const winbackCalls = callsArray.filter(c => c.call_type === 'Winback')
+      const successfulWinbacks = winbackCalls.filter(c => c.response_outcome === 'Paid').length
+      const winbackConversionRate = winbackCalls.length ? (successfulWinbacks / winbackCalls.length) * 100 : 0
+      const revenue = callsArray.filter(c => c.response_outcome === 'Paid').reduce((sum, c) => sum + (c.package_price_at_time || 0), 0)
+      const uniqueClients = new Set(callsArray.map(c => c.client_account_id)).size
+      let avgCallDuration = 0
+      const durations = callsArray.map(c => c.call_duration_seconds).filter(d => d && d > 0)
+      if (durations.length) avgCallDuration = durations.reduce((a, b) => a + b, 0) / durations.length
+
+      setKpis({ totalCalls, successfulWinbacks, winbackConversionRate: winbackConversionRate.toFixed(1), revenue, uniqueClients, avgCallDuration: Math.round(avgCallDuration) })
+
+      // Leaderboard
       const agentMap = new Map()
-      allCalls?.forEach(call => {
+      callsArray.forEach(call => {
         if (call.response_outcome === 'Paid') {
           const existing = agentMap.get(call.agent_email) || { wins: 0, revenue: 0 }
           existing.wins += 1
@@ -57,142 +110,85 @@ export default function SupervisorDashboard({ user }) {
       leaderboardArray.sort((a, b) => b.wins - a.wins)
       setLeaderboard(leaderboardArray.slice(0, 10))
 
-      // 5. Recent 20 calls (all agents)
-      const { data: recent } = await supabase
-        .from('call_activities')
-        .select('*, clients(name, account_id)')
-        .order('call_time', { ascending: false })
-        .limit(20)
-      setRecentCalls(recent || [])
-
-      // 6. Daily call trend (last 7 days)
-      const last7Days = []
-      for (let i = 6; i >= 0; i--) {
-        const date = new Date()
-        date.setDate(date.getDate() - i)
-        const start = date.toISOString().slice(0, 10)
-        const end = new Date(date.getTime() + 86400000).toISOString().slice(0, 10)
-        const { count } = await supabase
-          .from('call_activities')
-          .select('*', { count: 'exact', head: true })
-          .gte('call_time', start)
-          .lt('call_time', end)
-        last7Days.push({ date: start, day: start.slice(5), calls: count || 0 })
+      // Trend
+      const dayCount = (new Date(end) - new Date(start)) / (1000 * 3600 * 24)
+      let grouped
+      if (dayCount <= 31) {
+        const map = new Map()
+        callsArray.forEach(call => { const day = call.call_time.slice(0,10); map.set(day, (map.get(day)||0)+1) })
+        grouped = Array.from(map.entries()).map(([date, count]) => ({ date, count }))
+        grouped.sort((a,b)=>a.date.localeCompare(b.date))
+      } else {
+        const map = new Map()
+        callsArray.forEach(call => {
+          const d = new Date(call.call_time)
+          const year = d.getFullYear()
+          const week = Math.ceil((((d - new Date(year,0,1)) / 86400000) + 1) / 7)
+          const key = `${year}-W${week}`
+          map.set(key, (map.get(key)||0)+1)
+        })
+        grouped = Array.from(map.entries()).map(([week, count]) => ({ date: week, count }))
+        grouped.sort((a,b)=>a.date.localeCompare(b.date))
       }
-      setDailyTrend(last7Days)
+      setTrendData(grouped)
+
+      // Recent calls (limit 20)
+      setRecentCalls(callsArray.slice(0,20))
 
       setLoading(false)
     }
-
     fetchData()
-  }, [])
+  }, [range])
 
   if (loading) return <div>Loading supervisor dashboard...</div>
 
-  const maxCalls = Math.max(...dailyTrend.map(d => d.calls), 1)
+  const maxCount = Math.max(...trendData.map(d => d.count), 1)
+  const isDaily = trendData.length > 0 && trendData[0].date.includes('-W') === false
 
   return (
     <div>
-      <h2 style={{ marginBottom: '1rem' }}>Supervisor Dashboard – Team Performance</h2>
-
-      {/* Stats grid */}
-      <div className="stats-grid">
-        <div className="stat-card">
-          <div className="stat-number">{teamStats.totalCallsToday}</div>
-          <div className="stat-label">Total Calls Today</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-number">{teamStats.winbackSuccessRate}%</div>
-          <div className="stat-label">Winback Success Rate</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-number">${teamStats.revenueToday.toLocaleString()}</div>
-          <div className="stat-label">Revenue Today</div>
-        </div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+        <h2>Supervisor Dashboard – Team Performance</h2>
+        <DateRangeFilter value={range} onChange={setRange} />
       </div>
 
-      {/* Daily Call Trend – bar chart */}
+      <div className="stats-grid">
+        <div className="stat-card"><div className="stat-number">{kpis.totalCalls}</div><div className="stat-label">Total Calls</div></div>
+        <div className="stat-card"><div className="stat-number">{kpis.successfulWinbacks}</div><div className="stat-label">Successful Winbacks</div></div>
+        <div className="stat-card"><div className="stat-number">{kpis.winbackConversionRate}%</div><div className="stat-label">Winback Conversion</div></div>
+        <div className="stat-card"><div className="stat-number">${kpis.revenue.toLocaleString()}</div><div className="stat-label">Revenue</div></div>
+        <div className="stat-card"><div className="stat-number">{kpis.uniqueClients}</div><div className="stat-label">Unique Clients</div></div>
+        {kpis.avgCallDuration > 0 && <div className="stat-card"><div className="stat-number">{kpis.avgCallDuration}s</div><div className="stat-label">Avg Call Duration</div></div>}
+      </div>
+
       <div className="card" style={{ marginBottom: '2rem' }}>
-        <h3 style={{ marginBottom: '1rem' }}>Daily Call Trend (Last 7 days)</h3>
-        <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-end', justifyContent: 'space-around', flexWrap: 'wrap' }}>
-          {dailyTrend.map(day => (
-            <div key={day.date} style={{ textAlign: 'center', flex: 1, minWidth: '60px' }}>
-              <div style={{
-                backgroundColor: 'var(--primary)',
-                height: `${(day.calls / maxCalls) * 120}px`,
-                width: '40px',
-                margin: '0 auto',
-                borderRadius: '8px 8px 4px 4px',
-                transition: 'height 0.3s',
-              }} />
-              <div style={{ marginTop: '8px', fontWeight: '500', fontSize: '0.8rem' }}>{day.day}</div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{day.calls} calls</div>
+        <h3>Call Trend ({isDaily ? 'daily' : 'weekly'})</h3>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end', justifyContent: 'space-around', flexWrap: 'wrap' }}>
+          {trendData.map(item => (
+            <div key={item.date} style={{ textAlign: 'center', flex: 1, minWidth: '50px' }}>
+              <div style={{ backgroundColor: 'var(--primary)', height: `${(item.count / maxCount) * 120}px`, width: '30px', margin: '0 auto', borderRadius: '8px 8px 4px 4px' }} />
+              <div style={{ fontSize: '0.7rem', marginTop: '8px' }}>{item.date.slice(5)}</div>
+              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{item.count}</div>
             </div>
           ))}
         </div>
       </div>
 
-      {/* Agent Leaderboard */}
       <div className="table-container" style={{ marginBottom: '2rem' }}>
         <h3 style={{ padding: '1rem 1rem 0 1rem' }}>Agent Leaderboard (by successful winbacks)</h3>
-        <table>
-          <thead>
-            <tr>
-              <th>Agent</th>
-              <th>Successful Winbacks</th>
-              <th>Revenue Generated</th>
-            </tr>
-          </thead>
-          <tbody>
-            {leaderboard.length === 0 ? (
-              <tr>
-                <td colSpan="3" style={{ textAlign: 'center', padding: '2rem' }}>No winback data yet</td>
-              </tr>
-            ) : (
-              leaderboard.map(agent => (
-                <tr key={agent.email}>
-                  <td>{agent.email}</td>
-                  <td>{agent.wins}</td>
-                  <td>${agent.revenue.toLocaleString()}</td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+        <table><thead><tr><th>Agent</th><th>Successful Winbacks</th><th>Revenue Generated</th></tr></thead>
+        <tbody>{leaderboard.length === 0 && <tr><td colSpan="3" style={{ textAlign: 'center' }}>No winback data in this period</td></tr>}
+          {leaderboard.map(agent => <tr key={agent.email}><td>{agent.email}</td><td>{agent.wins}</td><td>${agent.revenue.toLocaleString()}</td></tr>)}
+        </tbody></table>
       </div>
 
-      {/* Recent Team Calls */}
       <div className="table-container">
-        <h3 style={{ padding: '1rem 1rem 0 1rem' }}>Recent Team Calls</h3>
+        <h3 style={{ padding: '1rem 1rem 0 1rem' }}>Recent Calls (within selected period)</h3>
         <div style={{ overflowX: 'auto' }}>
-          <table>
-            <thead>
-              <tr>
-                <th>Time</th>
-                <th>Client</th>
-                <th>Agent</th>
-                <th>Type</th>
-                <th>Outcome</th>
-              </tr>
-            </thead>
-            <tbody>
-              {recentCalls.length === 0 ? (
-                <tr>
-                  <td colSpan="5" style={{ textAlign: 'center', padding: '2rem' }}>No calls yet</td>
-                </tr>
-              ) : (
-                recentCalls.map(call => (
-                  <tr key={call.id}>
-                    <td>{new Date(call.call_time).toLocaleString()}</td>
-                    <td>{call.clients?.name} ({call.clients?.account_id})</td>
-                    <td>{call.agent_email}</td>
-                    <td>{call.call_type}</td>
-                    <td>{call.call_outcome}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+          <table><thead><tr><th>Time</th><th>Client</th><th>Agent</th><th>Type</th><th>Outcome</th></tr></thead>
+          <tbody>{recentCalls.map(call => (
+            <tr key={call.id}><td>{new Date(call.call_time).toLocaleString()}</td><td>{call.clients?.name} ({call.clients?.account_id})</td><td>{call.agent_email}</td><td>{call.call_type}</td><td>{call.call_outcome}</td></tr>
+          ))}</tbody></table>
         </div>
       </div>
     </div>

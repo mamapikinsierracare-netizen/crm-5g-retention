@@ -350,6 +350,17 @@ tr:hover td {
 .p-2 { padding: 0.5rem; }
 .gap-2 { gap: 0.5rem; }
 
+/* ----- DATE RANGE SELECT (for dashboards) ----- */
+.date-range-select {
+  background: var(--bg-white);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.4rem 0.8rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
 /* ----- RESPONSIVE ----- */
 @media (max-width: 768px) {
   .app-header {
@@ -369,5 +380,9 @@ tr:hover td {
   }
   th, td {
     padding: 0.6rem;
+  }
+  .date-range-select {
+    width: 100%;
+    margin-bottom: 0.5rem;
   }
 }
