@@ -14,6 +14,7 @@ import BulkUpload from './BulkUpload'
 import CustomersList from './CustomersList'
 import { supabase } from './supabase'
 import companyLogo from './assets/one.jpg'
+import ConversionSettings from './components/ConversionSettings'
 
 function App() {
   const [user, setUser] = useState(null)
@@ -74,9 +75,10 @@ function App() {
   }
 
   const showUserManagement = user.role === 'manager' || user.role === 'admin'
-  // 🟢 CHANGE: Allow agents to see the Audit Log button (RLS will filter data)
   const showAuditLog = user.role === 'manager' || user.role === 'admin' || user.role === 'agent'
   const showBulkUpload = user.role === 'manager' || user.role === 'admin'
+  // NEW: Show Conversion tab for finance, manager, admin
+  const showConversion = user.role === 'finance' || user.role === 'manager' || user.role === 'admin'
 
   return (
     <div style={{ position: 'relative', minHeight: '100vh' }}>
@@ -108,6 +110,8 @@ function App() {
               {showUserManagement && <button onClick={() => setView('users')}>User Management</button>}
               {showAuditLog && <button onClick={() => setView('audit')}>Audit Log</button>}
               {showBulkUpload && <button onClick={() => setView('bulk')}>Bulk Upload</button>}
+              {/* NEW Conversion button */}
+              {showConversion && <button onClick={() => setView('conversion')}>Conversion</button>}
             </div>
           </div>
           <div className="user-area">
@@ -129,8 +133,10 @@ function App() {
           )}
           {view === 'customers' && <CustomersList user={user} />}
           {view === 'users' && <UserManagement user={user} />}
-          {view === 'audit' && <AuditLog user={user} />}   {/* Pass user prop for any role-based UI inside */}
+          {view === 'audit' && <AuditLog user={user} />}
           {view === 'bulk' && <BulkUpload user={user} />}
+          {/* NEW Conversion view */}
+          {view === 'conversion' && <ConversionSettings user={user} />}
         </div>
       </div>
     </div>
