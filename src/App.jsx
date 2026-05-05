@@ -11,7 +11,7 @@ import UserManagement from './UserManagement'
 import NotificationsCenter from './NotificationsCenter'
 import BulkUpload from './BulkUpload'
 import CustomersList from './CustomersList'
-import { supabase } from '../supabase'
+import { supabase } from './supabase'
 import companyLogo from './assets/one.jpg'
 import ConversionSettings from './components/ConversionSettings'
 import BackupManager from './components/BackupManager'
@@ -120,18 +120,11 @@ function App() {
       <div style={{ position: 'relative', zIndex: 1 }}>
         <header className="app-header">
           <div className="logo-area">
-            {/* Hamburger button for mobile */}
-            <button
-              className="hamburger"
-              onClick={toggleSidebar}
-              style={{ display: 'inline-block', background: 'none', border: 'none', fontSize: '1.8rem', cursor: 'pointer', marginRight: '1rem' }}
-            >
+            <button className="hamburger" onClick={toggleSidebar}>
               ☰
             </button>
             <img src={companyLogo} alt="Company Logo" className="logo-img" onClick={() => setView('dashboard')} />
-            
-            {/* Desktop navigation */}
-            <div className="nav-buttons desktop-nav">
+            <div className="desktop-nav">
               {navItems.filter(item => item.show).map(item => (
                 <button key={item.view} onClick={() => { setView(item.view); setSidebarOpen(false); }}>
                   {item.label}
@@ -149,7 +142,7 @@ function App() {
           </div>
         </header>
 
-        {/* Mobile sidebar drawer */}
+        {/* Mobile sidebar */}
         <div className={`mobile-sidebar ${sidebarOpen ? 'open' : ''}`}>
           <div className="sidebar-header">
             <h3>Menu</h3>

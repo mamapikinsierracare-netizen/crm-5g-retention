@@ -11,7 +11,6 @@ export default function AgentMessageCenter({ user }) {
   const [sending, setSending] = useState(false)
   const [availableRecipients, setAvailableRecipients] = useState([])
 
-  // Fetch list of possible recipients (supervisors, managers, admins)
   useEffect(() => {
     const fetchRecipients = async () => {
       const { data } = await supabase
@@ -36,7 +35,6 @@ export default function AgentMessageCenter({ user }) {
 
   useEffect(() => {
     fetchMessages()
-    // Subscribe to changes
     const subscription = supabase
       .channel('private_messages')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'private_messages' }, () => {
