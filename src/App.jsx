@@ -5,23 +5,23 @@ import FinanceDashboard from './FinanceDashboard'
 import SupervisorDashboard from './SupervisorDashboard'
 import ManagerDashboard from './ManagerDashboard'
 import Broadcasts from './Broadcasts'
-import SendPrivateMessage from './SendPrivateMessage'
 import PrivateMessageInbox from './PrivateMessageInbox'
 import AuditLog from './AuditLog'
 import UserManagement from './UserManagement'
 import NotificationsCenter from './NotificationsCenter'
 import BulkUpload from './BulkUpload'
 import CustomersList from './CustomersList'
-import { supabase } from './supabase'
+import { supabase } from '../supabase'
 import companyLogo from './assets/one.jpg'
 import ConversionSettings from './components/ConversionSettings'
 import BackupManager from './components/BackupManager'
 import TwoFactorSetup from './components/TwoFactorSetup'
+import AgentMessageCenter from './components/AgentMessageCenter'
 
 function App() {
   const [user, setUser] = useState(null)
   const [view, setView] = useState('dashboard')
-  
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem('theme')
     if (saved) return saved
@@ -38,16 +38,16 @@ function App() {
       if (session) {
         supabase
           .from('users')
-          .select('role')
+          .select('role, full_name')
           .eq('email', session.user.email)
           .single()
           .then(({ data }) => {
             if (data) {
               setUser({
-  email: session.user.email,
-  role: data.role,
-  full_name: data.full_name,
-})
+                email: session.user.email,
+                role: data.role,
+                full_name: data.full_name,
+              })
             }
           })
       }
@@ -84,8 +84,24 @@ function App() {
   const showBackup = user.role === 'manager' || user.role === 'admin'
   const show2FA = user.role === 'manager' || user.role === 'admin'
 
+  const navItems = [
+    { label: 'Dashboard', view: 'dashboard', show: true },
+    { label: 'Broadcasts', view: 'broadcasts', show: true },
+    { label: 'Messages', view: 'messages', show: true },
+    { label: 'Customers', view: 'customers', show: true },
+    { label: 'User Management', view: 'users', show: showUserManagement },
+    { label: 'Audit Log', view: 'audit', show: showAuditLog },
+    { label: 'Bulk Upload', view: 'bulk', show: showBulkUpload },
+    { label: 'Conversion', view: 'conversion', show: showConversion },
+    { label: 'Backup', view: 'backup', show: showBackup },
+    { label: '2FA Setup', view: '2fa', show: show2FA },
+  ]
+
+  const toggleSidebar = () => setSidebarOpen(!sidebarOpen)
+
   return (
     <div style={{ position: 'relative', minHeight: '100vh' }}>
+      {/* Watermark */}
       <div style={{
         position: 'fixed',
         top: 0,
@@ -104,18 +120,23 @@ function App() {
       <div style={{ position: 'relative', zIndex: 1 }}>
         <header className="app-header">
           <div className="logo-area">
+            {/* Hamburger button for mobile */}
+            <button
+              className="hamburger"
+              onClick={toggleSidebar}
+              style={{ display: 'inline-block', background: 'none', border: 'none', fontSize: '1.8rem', cursor: 'pointer', marginRight: '1rem' }}
+            >
+              ☰
+            </button>
             <img src={companyLogo} alt="Company Logo" className="logo-img" onClick={() => setView('dashboard')} />
-            <div className="nav-buttons">
-              <button onClick={() => setView('dashboard')}>Dashboard</button>
-              <button onClick={() => setView('broadcasts')}>Broadcasts</button>
-              <button onClick={() => setView('messages')}>Messages</button>
-              <button onClick={() => setView('customers')}>Customers</button>
-              {showUserManagement && <button onClick={() => setView('users')}>User Management</button>}
-              {showAuditLog && <button onClick={() => setView('audit')}>Audit Log</button>}
-              {showBulkUpload && <button onClick={() => setView('bulk')}>Bulk Upload</button>}
-              {showConversion && <button onClick={() => setView('conversion')}>Conversion</button>}
-              {showBackup && <button onClick={() => setView('backup')}>Backup</button>}
-              {show2FA && <button onClick={() => setView('2fa')}>2FA Setup</button>}
+            
+            {/* Desktop navigation */}
+            <div className="nav-buttons desktop-nav">
+              {navItems.filter(item => item.show).map(item => (
+                <button key={item.view} onClick={() => { setView(item.view); setSidebarOpen(false); }}>
+                  {item.label}
+                </button>
+              ))}
             </div>
           </div>
           <div className="user-area">
@@ -127,12 +148,29 @@ function App() {
             <button onClick={handleLogout}>Logout</button>
           </div>
         </header>
+
+        {/* Mobile sidebar drawer */}
+        <div className={`mobile-sidebar ${sidebarOpen ? 'open' : ''}`}>
+          <div className="sidebar-header">
+            <h3>Menu</h3>
+            <button onClick={toggleSidebar}>✕</button>
+          </div>
+          <div className="sidebar-nav">
+            {navItems.filter(item => item.show).map(item => (
+              <button key={item.view} onClick={() => { setView(item.view); setSidebarOpen(false); }}>
+                {item.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {sidebarOpen && <div className="sidebar-overlay" onClick={toggleSidebar}></div>}
+
         <div style={{ padding: '1.5rem' }}>
           {view === 'dashboard' && <DashboardComponent user={user} />}
           {view === 'broadcasts' && <Broadcasts user={user} />}
           {view === 'messages' && (
             user.role === 'agent' ? 
-              <SendPrivateMessage user={user} /> : 
+              <AgentMessageCenter user={user} /> : 
               <PrivateMessageInbox user={user} />
           )}
           {view === 'customers' && <CustomersList user={user} />}
