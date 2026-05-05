@@ -16,42 +16,59 @@ export default function Broadcasts({ user }) {
 
   const isModerator = ['supervisor', 'manager', 'finance', 'admin'].includes(user.role)
 
-  const fetchBroadcasts = async () => {
-    setLoading(true)
-    const { data, error } = await supabase
-      .from('broadcasts')
-      .select('*')
-      .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`)
-      .order('is_pinned', { ascending: false })
-      .order('created_at', { ascending: false })
-
-    if (!error) setBroadcasts(data || [])
-    else console.error(error)
-    setLoading(false)
-  }
-
   useEffect(() => {
+    const fetchBroadcasts = async () => {
+      setLoading(true)
+      const { data, error } = await supabase
+        .from('broadcasts')
+        .select('*')
+        .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`)
+        .order('is_pinned', { ascending: false })
+        .order('created_at', { ascending: false })
+
+      if (!error) {
+        setBroadcasts(data || [])
+        // Mark all displayed broadcasts as read for this user
+        if (data && data.length > 0 && user?.email) {
+          const reads = data.map(b => ({
+            broadcast_id: b.id,
+            user_email: user.email,
+          }))
+          for (const read of reads) {
+            await supabase
+              .from('broadcast_reads')
+              .upsert(read, { onConflict: 'broadcast_id, user_email' })
+          }
+        }
+      } else console.error(error)
+      setLoading(false)
+    }
+
     fetchBroadcasts()
-  }, [])
+  }, [user?.email]) // dependency on user email to re‑fetch if user changes (though unlikely)
 
   const handleSubmit = async (e) => {
     e.preventDefault()
+    const expiresAtValue = form.expires_at && form.expires_at.trim() !== '' ? form.expires_at : null
+
     const payload = {
-      ...form,
+      title: form.title,
+      content: form.content,
+      type: form.type,
+      is_pinned: form.is_pinned,
+      expires_at: expiresAtValue,
       created_by: user.email,
       created_by_role: user.role,
       updated_at: new Date().toISOString(),
     }
 
     if (editingId) {
-      // Update existing broadcast – no notification needed (optional)
       const { error } = await supabase
         .from('broadcasts')
         .update(payload)
         .eq('id', editingId)
       if (error) alert('Update failed: ' + error.message)
     } else {
-      // Insert new broadcast
       const { data, error } = await supabase
         .from('broadcasts')
         .insert([{ ...payload, created_at: new Date().toISOString() }])
@@ -80,13 +97,27 @@ export default function Broadcasts({ user }) {
     setShowForm(false)
     setEditingId(null)
     setForm({ title: '', content: '', type: 'announcement', is_pinned: false, expires_at: '' })
-    fetchBroadcasts()
+    // Re-fetch broadcasts after create/update
+    const { data: newData } = await supabase
+      .from('broadcasts')
+      .select('*')
+      .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`)
+      .order('is_pinned', { ascending: false })
+      .order('created_at', { ascending: false })
+    if (newData) setBroadcasts(newData)
   }
 
   const handleDelete = async (id) => {
     if (window.confirm('Delete this broadcast?')) {
       await supabase.from('broadcasts').delete().eq('id', id)
-      fetchBroadcasts()
+      // Refresh list
+      const { data: newData } = await supabase
+        .from('broadcasts')
+        .select('*')
+        .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`)
+        .order('is_pinned', { ascending: false })
+        .order('created_at', { ascending: false })
+      if (newData) setBroadcasts(newData)
     }
   }
 
@@ -107,7 +138,14 @@ export default function Broadcasts({ user }) {
       .from('broadcasts')
       .update({ is_pinned: !currentPinned, updated_at: new Date().toISOString() })
       .eq('id', id)
-    fetchBroadcasts()
+    // Refresh list
+    const { data: newData } = await supabase
+      .from('broadcasts')
+      .select('*')
+      .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`)
+      .order('is_pinned', { ascending: false })
+      .order('created_at', { ascending: false })
+    if (newData) setBroadcasts(newData)
   }
 
   if (loading) return <div>Loading broadcasts...</div>
@@ -124,7 +162,7 @@ export default function Broadcasts({ user }) {
       </div>
 
       {showForm && (
-        <form onSubmit={handleSubmit} style={{ border: '1px solid #ccc', padding: '15px', marginBottom: '20px' }}>
+        <form onSubmit={handleSubmit} style={{ border: '1px solid var(--border)', padding: '15px', marginBottom: '20px', borderRadius: 'var(--radius)' }}>
           <div><label>Title:</label><input name="title" value={form.title} onChange={e => setForm({...form, title: e.target.value})} required style={{width: '100%'}} /></div>
           <div><label>Content:</label><textarea name="content" value={form.content} onChange={e => setForm({...form, content: e.target.value})} required rows="3" style={{width: '100%'}} /></div>
           <div><label>Type:</label>
@@ -140,7 +178,7 @@ export default function Broadcasts({ user }) {
 
       {broadcasts.length === 0 && <p>No broadcasts yet.</p>}
       {broadcasts.map(b => (
-        <div key={b.id} style={{ borderLeft: '4px solid ' + (b.type === 'warning' ? 'orange' : b.type === 'success' ? 'green' : b.type === 'info' ? 'blue' : 'gray'), marginBottom: '15px', padding: '10px', background: '#f9f9f9' }}>
+        <div key={b.id} style={{ borderLeft: '4px solid ' + (b.type === 'warning' ? 'orange' : b.type === 'success' ? 'green' : b.type === 'info' ? 'blue' : 'gray'), marginBottom: '15px', padding: '10px', background: 'var(--bg-card)', borderRadius: 'var(--radius)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
             <h3>{b.title} {b.is_pinned && '📌'} <small>({b.type})</small></h3>
             {isModerator && (
@@ -152,7 +190,7 @@ export default function Broadcasts({ user }) {
             )}
           </div>
           <p>{b.content}</p>
-          <div style={{ fontSize: 'small', color: 'gray' }}>Posted by {b.created_by} ({b.created_by_role}) on {new Date(b.created_at).toLocaleString()}{b.expires_at && ` – Expires: ${new Date(b.expires_at).toLocaleString()}`}</div>
+          <div style={{ fontSize: 'small', color: 'var(--text-muted)' }}>Posted by {b.created_by} ({b.created_by_role}) on {new Date(b.created_at).toLocaleString()}{b.expires_at && ` – Expires: ${new Date(b.expires_at).toLocaleString()}`}</div>
         </div>
       ))}
     </div>
