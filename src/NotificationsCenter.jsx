@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { supabase } from '../supabase';
+import { supabase } from './supabase';   // ✅ fixed path
 
 export default function NotificationsCenter({ user }) {
   const [unreadCount, setUnreadCount] = useState(0);
@@ -36,7 +36,7 @@ export default function NotificationsCenter({ user }) {
       return;
     }
 
-    const { data: readBroadcasts } = await supabase  // removed unused error variable
+    const { data: readBroadcasts } = await supabase
       .from('broadcast_reads')
       .select('broadcast_id')
       .eq('user_email', user.email)
