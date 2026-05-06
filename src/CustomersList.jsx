@@ -266,14 +266,26 @@ export default function CustomersList({ user }) {
           <table style={{ minWidth: '1200px' }}>
             <thead>
               <tr>
-                <th>Account ID</th><th>Name</th><th>Phone</th><th>Address</th><th>Package</th>
-                <th>Price (USD)</th><th>Price (NLe)</th><th>Retention Agent</th><th>Installation Date</th>
-                <th>Status</th><th>AAV (USD)</th><th>Expires In</th><th>Disabled Reason</th>
+                <th>Account ID</th>
+                <th>Name</th>
+                <th>Phone</th>
+                <th>Address</th>
+                <th>Package</th>
+                <th>Price (USD)</th>
+                <th>Price (NLe)</th>
+                <th>Retention Agent</th>
+                <th>Installation Date</th>
+                <th>Status</th>
+                <th>AAV (USD)</th>
+                <th>Expires In</th>
+                <th>Disabled Reason</th>
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 ? (
-                <tr><td colSpan="13" style={{ textAlign: 'center' }}>No customers found</td</tr>
+                <tr>
+                  <td colSpan={13} style={{ textAlign: 'center' }}>No customers found</td>
+                </tr>
               ) : (
                 filtered.map(client => (
                   <tr
@@ -304,7 +316,6 @@ export default function CustomersList({ user }) {
         </div>
       </div>
       
-      {/* Modal with new format (matches image style) */}
       {showModal && selectedCustomer && (
         <div
           style={{
@@ -332,29 +343,20 @@ export default function CustomersList({ user }) {
               <button onClick={closeModal} style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer' }}>✕</button>
             </div>
             
-            {/* Account ID and Contact as shown in image */}
             <div style={{ marginBottom: '0.5rem' }}>
               <strong>Account ID:</strong> {selectedCustomer.account_id}
             </div>
             <div style={{ marginBottom: '0.5rem' }}>
               <strong>Contact:</strong> {selectedCustomer.contact}
             </div>
-            
-            {/* Package line */}
             <div style={{ marginBottom: '0.5rem' }}>
-              <strong>Package:</strong> {selectedCustomer.current_package || '-'} 
+              <strong>Package:</strong> {selectedCustomer.current_package || '-'}
               {selectedCustomer.package_price ? ` - USD $${selectedCustomer.package_price}` : ''}
             </div>
-            
-            {/* Installation Date */}
             <div style={{ marginBottom: '0.5rem' }}>
               <strong>Installation Date:</strong> {selectedCustomer.installation_date || '-'}
             </div>
-            
-            {/* Separator */}
             <hr style={{ margin: '0.75rem 0', borderColor: 'var(--border)' }} />
-            
-            {/* Name, Address, Agent, Status (as separate lines) */}
             <div style={{ marginBottom: '0.5rem' }}>
               <strong>Name:</strong> {selectedCustomer.name}
             </div>
@@ -367,8 +369,6 @@ export default function CustomersList({ user }) {
             <div style={{ marginBottom: '0.5rem' }}>
               <strong>Account Status:</strong> {selectedCustomer.account_status || 'active'}
             </div>
-            
-            {/* Additional fields (AAV, Expiry, Disabled Reason) keep similar style */}
             <div style={{ marginBottom: '0.5rem' }}>
               <strong>AAV Value (USD):</strong> {selectedCustomer.aav_value_usd ? `$${selectedCustomer.aav_value_usd}` : '-'}
             </div>
@@ -380,7 +380,6 @@ export default function CustomersList({ user }) {
               <strong>Disabled Reason:</strong> {selectedCustomer.disabled_reason || '-'}
             </div>
             
-            {/* Call Form for agents only */}
             {user?.role === 'agent' && (
               <div style={{ marginTop: '1.5rem', borderTop: '1px solid var(--border)', paddingTop: '1rem' }}>
                 <h4 style={{ marginBottom: '0.75rem' }}>Log a Call</h4>
