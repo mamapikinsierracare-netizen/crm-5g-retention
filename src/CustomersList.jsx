@@ -1,17 +1,17 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from './supabase';
-import CallForm from './CallForm'; // adjust path if CallForm is inside components
+import CallForm from './CallForm';
 
 export default function CustomersList({ user }) {
   const [clients, setClients] = useState([]);
   const [loading, setLoading] = useState(true);
   
-  // Dropdown options
+  // Dropdown options (unique values from DB)
   const [packageOptions, setPackageOptions] = useState([]);
   const [agentOptions, setAgentOptions] = useState([]);
   const [statusOptions, setStatusOptions] = useState([]);
   
-  // Filters (includes per-field filters + global search)
+  // Filters
   const [filters, setFilters] = useState({
     account_id: '',
     name: '',
@@ -20,17 +20,17 @@ export default function CustomersList({ user }) {
     current_package: '',
     retention_agent: '',
     account_status: '',
-    globalSearch: ''   // unified search box
+    globalSearch: ''
   });
   
   // Modal state
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [showModal, setShowModal] = useState(false);
   
-  // Fetch dropdown options (Packages, Agents, Status) from database
+  // Fetch unique values for each filter dropdown from the actual table
   const fetchDropdownOptions = async () => {
     try {
-      // Packages
+      // PACKAGE column
       const { data: packages } = await supabase
         .from('clients')
         .select('current_package')
@@ -40,7 +40,7 @@ export default function CustomersList({ user }) {
       let uniquePackages = [...new Set(packages?.map(p => p.current_package?.trim()).filter(Boolean))];
       setPackageOptions(uniquePackages);
       
-      // Agents
+      // RETENTION AGENT column
       const { data: agents } = await supabase
         .from('clients')
         .select('retention_agent')
@@ -50,7 +50,7 @@ export default function CustomersList({ user }) {
       let uniqueAgents = [...new Set(agents?.map(a => a.retention_agent?.trim()).filter(Boolean))];
       setAgentOptions(uniqueAgents);
       
-      // Statuses
+      // STATUS column (account_status)
       const { data: statuses } = await supabase
         .from('clients')
         .select('account_status')
@@ -60,11 +60,11 @@ export default function CustomersList({ user }) {
       let uniqueStatuses = [...new Set(statuses?.map(s => s.account_status?.trim()).filter(Boolean))];
       setStatusOptions(uniqueStatuses);
     } catch (err) {
-      console.error(err);
+      console.error('Error fetching filter options:', err);
     }
   };
   
-  // Fetch all clients once
+  // Fetch all clients
   const fetchClients = async () => {
     setLoading(true);
     const { data, error } = await supabase
@@ -83,11 +83,11 @@ export default function CustomersList({ user }) {
     fetchDropdownOptions();
   }, []);
   
-  // IMPROVED FILTERING LOGIC – trims values and handles spaces
+  // FILTER LOGIC – exact match after trimming, like Excel/Google Sheets
   const filtered = useMemo(() => {
     let result = [...clients];
     
-    // Text filters (case‑insensitive, partial match)
+    // Text filters (contains, case-insensitive)
     if (filters.account_id.trim()) {
       const search = filters.account_id.trim().toLowerCase();
       result = result.filter(c => c.account_id.toLowerCase().includes(search));
@@ -105,25 +105,31 @@ export default function CustomersList({ user }) {
       result = result.filter(c => (c.address || '').toLowerCase().includes(search));
     }
     
-    // Dropdown filters – exact match after trimming both sides
+    // Dropdown filters – EXACT match after trimming (case-sensitive but trimmed)
     if (filters.current_package) {
-      result = result.filter(c => (c.current_package || '').trim() === filters.current_package);
+      const selected = filters.current_package.trim();
+      result = result.filter(c => (c.current_package || '').trim() === selected);
     }
     if (filters.retention_agent) {
-      result = result.filter(c => (c.retention_agent || '').trim() === filters.retention_agent);
+      const selected = filters.retention_agent.trim();
+      result = result.filter(c => (c.retention_agent || '').trim() === selected);
     }
     if (filters.account_status) {
-      result = result.filter(c => (c.account_status || '').trim() === filters.account_status);
+      const selected = filters.account_status.trim();
+      result = result.filter(c => (c.account_status || '').trim() === selected);
     }
     
-    // Global search (Account ID, Name, Phone, Address)
+    // Global search across all major text fields
     if (filters.globalSearch.trim()) {
       const search = filters.globalSearch.trim().toLowerCase();
       result = result.filter(c =>
         c.account_id.toLowerCase().includes(search) ||
         c.name.toLowerCase().includes(search) ||
         c.contact.toLowerCase().includes(search) ||
-        (c.address || '').toLowerCase().includes(search)
+        (c.address || '').toLowerCase().includes(search) ||
+        (c.current_package || '').toLowerCase().includes(search) ||
+        (c.retention_agent || '').toLowerCase().includes(search) ||
+        (c.account_status || '').toLowerCase().includes(search)
       );
     }
     
@@ -148,7 +154,7 @@ export default function CustomersList({ user }) {
     });
   };
   
-  // Export to CSV (includes new columns)
+  // Export to CSV
   const exportToCSV = () => {
     if (filtered.length === 0) {
       alert('No data to export');
@@ -189,7 +195,6 @@ export default function CustomersList({ user }) {
     URL.revokeObjectURL(url);
   };
   
-  // Helper to calculate "Expires In" days from expiry_date
   const getExpiresInText = (expiryDate) => {
     if (!expiryDate) return '-';
     const today = new Date();
@@ -202,13 +207,11 @@ export default function CustomersList({ user }) {
     return `${diffDays} days`;
   };
   
-  // Row click handler
   const handleRowClick = (customer) => {
     setSelectedCustomer(customer);
     setShowModal(true);
   };
   
-  // Close modal
   const closeModal = () => {
     setShowModal(false);
     setSelectedCustomer(null);
@@ -218,7 +221,7 @@ export default function CustomersList({ user }) {
   
   return (
     <div>
-      {/* Header with Export and Clear Filters */}
+      {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
         <h2>Customers</h2>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -227,41 +230,68 @@ export default function CustomersList({ user }) {
         </div>
       </div>
       
-      {/* Unified Search Box */}
+      {/* Global Search Box */}
       <div style={{ marginBottom: '1rem' }}>
         <input
           type="text"
           name="globalSearch"
-          placeholder="Search by Account ID, Name, Phone, Address..."
+          placeholder="Search across all columns (Account ID, Name, Phone, Address, Package, Agent, Status)..."
           value={filters.globalSearch}
           onChange={handleFilterChange}
           style={{ width: '100%', padding: '0.5rem', fontSize: '1rem' }}
         />
       </div>
       
-      {/* Individual column filters (retained) */}
+      {/* Column Filters with Headings - exactly like Excel */}
       <div className="table-container" style={{ marginBottom: '1rem', padding: '1rem' }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '0.5rem' }}>
-          <input type="text" name="account_id" placeholder="Acc ID" value={filters.account_id} onChange={handleFilterChange} />
-          <input type="text" name="name" placeholder="Name" value={filters.name} onChange={handleFilterChange} />
-          <input type="text" name="contact" placeholder="Phone" value={filters.contact} onChange={handleFilterChange} />
-          <input type="text" name="address" placeholder="Address" value={filters.address} onChange={handleFilterChange} />
-          <select name="current_package" value={filters.current_package} onChange={handleFilterChange}>
-            <option value="">All Packages</option>
-            {packageOptions.map(pkg => <option key={pkg} value={pkg}>{pkg}</option>)}
-          </select>
-          <select name="retention_agent" value={filters.retention_agent} onChange={handleFilterChange}>
-            <option value="">All Agents</option>
-            {agentOptions.map(agent => <option key={agent} value={agent}>{agent}</option>)}
-          </select>
-          <select name="account_status" value={filters.account_status} onChange={handleFilterChange}>
-            <option value="">All Status</option>
-            {statusOptions.map(status => <option key={status} value={status}>{status}</option>)}
-          </select>
+          <div>
+            <div style={{ fontSize: '0.7rem', fontWeight: 'bold', marginBottom: '0.25rem', color: 'var(--text-muted)' }}>ACCOUNT ID</div>
+            <input type="text" name="account_id" placeholder="Filter..." value={filters.account_id} onChange={handleFilterChange} />
+          </div>
+          <div>
+            <div style={{ fontSize: '0.7rem', fontWeight: 'bold', marginBottom: '0.25rem', color: 'var(--text-muted)' }}>NAME</div>
+            <input type="text" name="name" placeholder="Filter..." value={filters.name} onChange={handleFilterChange} />
+          </div>
+          <div>
+            <div style={{ fontSize: '0.7rem', fontWeight: 'bold', marginBottom: '0.25rem', color: 'var(--text-muted)' }}>PHONE</div>
+            <input type="text" name="contact" placeholder="Filter..." value={filters.contact} onChange={handleFilterChange} />
+          </div>
+          <div>
+            <div style={{ fontSize: '0.7rem', fontWeight: 'bold', marginBottom: '0.25rem', color: 'var(--text-muted)' }}>ADDRESS</div>
+            <input type="text" name="address" placeholder="Filter..." value={filters.address} onChange={handleFilterChange} />
+          </div>
+          <div>
+            <div style={{ fontSize: '0.7rem', fontWeight: 'bold', marginBottom: '0.25rem', color: 'var(--text-muted)' }}>PACKAGE</div>
+            <select name="current_package" value={filters.current_package} onChange={handleFilterChange}>
+              <option value="">All Packages</option>
+              {packageOptions.map(pkg => (
+                <option key={pkg} value={pkg}>{pkg}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <div style={{ fontSize: '0.7rem', fontWeight: 'bold', marginBottom: '0.25rem', color: 'var(--text-muted)' }}>RETENTION AGENT</div>
+            <select name="retention_agent" value={filters.retention_agent} onChange={handleFilterChange}>
+              <option value="">All Agents</option>
+              {agentOptions.map(agent => (
+                <option key={agent} value={agent}>{agent}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <div style={{ fontSize: '0.7rem', fontWeight: 'bold', marginBottom: '0.25rem', color: 'var(--text-muted)' }}>STATUS</div>
+            <select name="account_status" value={filters.account_status} onChange={handleFilterChange}>
+              <option value="">All Status</option>
+              {statusOptions.map(status => (
+                <option key={status} value={status}>{status}</option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
       
-      {/* Customers Table (clickable rows) */}
+      {/* Customers Table */}
       <div className="table-container">
         <div style={{ overflowX: 'auto' }}>
           <table style={{ minWidth: '1200px' }}>
@@ -304,7 +334,7 @@ export default function CustomersList({ user }) {
         </div>
       </div>
       
-      {/* Modal for Customer Details + Call Form (for agents only) */}
+      {/* Modal */}
       {showModal && selectedCustomer && (
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
@@ -319,7 +349,6 @@ export default function CustomersList({ user }) {
               <h3>Customer Details</h3>
               <button onClick={closeModal}>✕</button>
             </div>
-            
             <div className="form-group"><label>Account ID:</label> {selectedCustomer.account_id}</div>
             <div className="form-group"><label>Name:</label> {selectedCustomer.name}</div>
             <div className="form-group"><label>Phone:</label> {selectedCustomer.contact}</div>
@@ -334,7 +363,6 @@ export default function CustomersList({ user }) {
             <div className="form-group"><label>Expiry Date:</label> {selectedCustomer.expiry_date || '-'} {selectedCustomer.expiry_date && <span>({getExpiresInText(selectedCustomer.expiry_date)})</span>}</div>
             <div className="form-group"><label>Disabled Reason:</label> {selectedCustomer.disabled_reason || '-'}</div>
             
-            {/* Call Form only for agents */}
             {user?.role === 'agent' && (
               <div style={{ marginTop: '1.5rem', borderTop: '1px solid var(--border)', paddingTop: '1rem' }}>
                 <h4>Log a Call</h4>
@@ -342,7 +370,7 @@ export default function CustomersList({ user }) {
                   customer={selectedCustomer} 
                   onSuccess={() => {
                     closeModal();
-                    fetchClients(); // refresh list after call logged
+                    fetchClients();
                   }} 
                 />
               </div>
