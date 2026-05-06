@@ -24,62 +24,76 @@ export default function CustomersList({ user }) {
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [showModal, setShowModal] = useState(false);
   
-  // Fetch dropdown options
+  // Fetch dropdown options (Packages, Agents, Status) from database
   const fetchDropdownOptions = async () => {
+    console.log('🔍 fetchDropdownOptions: Starting...');
     try {
-      // Packages: get all distinct, trim spaces, keep original case
-      const { data: packages } = await supabase
+      // Packages query
+      const { data: packages, error: pkgError } = await supabase
         .from('clients')
         .select('current_package')
-        .not('current_package', 'is', null)
-        .neq('current_package', '')
-        .order('current_package');
+        .not('current_package', 'is', null);
+      
+      if (pkgError) {
+        console.error('❌ Error fetching packages:', pkgError);
+        throw pkgError;
+      }
+      
+      console.log('📦 Raw packages from DB:', packages?.length, 'rows');
+      console.log('📦 First 5 package values:', packages?.slice(0, 5).map(p => p.current_package));
+      
       let uniquePackages = [...new Set(packages?.map(p => p.current_package?.trim()).filter(Boolean))];
-      console.log('🔍 Distinct PACKAGE values found in database:', uniquePackages);
+      console.log('📦 Unique packages after Set & trim:', uniquePackages);
       setPackageOptions(uniquePackages);
       
-      // Agents
-      const { data: agents } = await supabase
+      // Agents query
+      const { data: agents, error: agentError } = await supabase
         .from('clients')
         .select('retention_agent')
-        .not('retention_agent', 'is', null)
-        .neq('retention_agent', '')
-        .order('retention_agent');
+        .not('retention_agent', 'is', null);
+      
+      if (agentError) throw agentError;
+      
       let uniqueAgents = [...new Set(agents?.map(a => a.retention_agent?.trim()).filter(Boolean))];
+      console.log('👤 Unique agents:', uniqueAgents);
       setAgentOptions(uniqueAgents);
       
-      // Statuses: standardize to 'Active' and 'Disabled' (case-insensitive)
-      const { data: statuses } = await supabase
+      // Statuses query
+      const { data: statuses, error: statusError } = await supabase
         .from('clients')
         .select('account_status')
-        .not('account_status', 'is', null)
-        .neq('account_status', '');
-      let raw = [...new Set(statuses?.map(s => s.account_status?.trim()).filter(Boolean))];
-      console.log('🔍 Raw distinct STATUS values:', raw);
-      // Convert each to capitalized form (Active / Disabled)
-      let standardized = raw.map(s => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase());
-      standardized = [...new Set(standardized)];
-      // Ensure only 'Active' and 'Disabled' appear (filter out any unexpected)
-      standardized = standardized.filter(s => s === 'Active' || s === 'Disabled');
-      setStatusOptions(standardized);
-      console.log('✅ Standardized STATUS dropdown options:', standardized);
+        .not('account_status', 'is', null);
+      
+      if (statusError) throw statusError;
+      
+      let uniqueStatuses = [...new Set(statuses?.map(s => s.account_status?.trim()).filter(Boolean))];
+      console.log('🏷️ Raw statuses from DB:', statuses?.slice(0, 5).map(s => s.account_status));
+      console.log('🏷️ Unique statuses after Set & trim:', uniqueStatuses);
+      setStatusOptions(uniqueStatuses);
+      
     } catch (err) {
-      console.error(err);
+      console.error('💥 Error in fetchDropdownOptions:', err);
     }
+    console.log('🔍 fetchDropdownOptions: Finished');
   };
   
+  // Fetch all clients once
   const fetchClients = async () => {
     setLoading(true);
     const { data, error } = await supabase
       .from('clients')
       .select('*')
       .order('created_at', { ascending: false });
-    if (error) console.error(error);
-    else setClients(data || []);
+    if (error) {
+      console.error(error);
+    } else {
+      setClients(data || []);
+    }
     setLoading(false);
   };
   
   useEffect(() => {
+    // Safe to call async state-setting functions on mount.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchClients();
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -90,7 +104,6 @@ export default function CustomersList({ user }) {
   const filtered = useMemo(() => {
     let result = [...clients];
     
-    // Text filters (case-insensitive contains)
     if (filters.account_id.trim()) {
       const search = filters.account_id.trim().toLowerCase();
       result = result.filter(c => c.account_id.toLowerCase().includes(search));
@@ -107,25 +120,18 @@ export default function CustomersList({ user }) {
       const search = filters.address.trim().toLowerCase();
       result = result.filter(c => (c.address || '').toLowerCase().includes(search));
     }
-    
-    // Package filter (exact match after trim, case-sensitive).
-    // If you want case-insensitive package filtering, change to .toLowerCase() comparison.
     if (filters.current_package) {
       const selected = filters.current_package.trim();
       result = result.filter(c => (c.current_package || '').trim() === selected);
     }
-    // Agent filter (exact match after trim)
     if (filters.retention_agent) {
       const selected = filters.retention_agent.trim();
       result = result.filter(c => (c.retention_agent || '').trim() === selected);
     }
-    // Status filter – case-insensitive because dropdown shows 'Active' but DB may have 'active'
     if (filters.account_status) {
-      const selected = filters.account_status.trim().toLowerCase();
-      result = result.filter(c => (c.account_status || '').trim().toLowerCase() === selected);
+      const selected = filters.account_status.trim();
+      result = result.filter(c => (c.account_status || '').trim() === selected);
     }
-    
-    // Global search
     if (filters.globalSearch.trim()) {
       const search = filters.globalSearch.trim().toLowerCase();
       result = result.filter(c =>
@@ -138,7 +144,6 @@ export default function CustomersList({ user }) {
         (c.account_status || '').toLowerCase().includes(search)
       );
     }
-    
     return result;
   }, [clients, filters]);
   
@@ -303,47 +308,56 @@ export default function CustomersList({ user }) {
               </tr>
             </thead>
             <tbody>
-              {filtered.length === 0 && (
-                <tr><td colSpan="13" style={{ textAlign: 'center' }}>No customers found</td></tr>
-              )}
-              {filtered.map(client => (
-                <tr 
-                  key={client.account_id} 
-                  onClick={() => handleRowClick(client)}
-                  style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)' }}
-                  onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--hover-bg, #f5f5f5)'}
-                  onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-                >
-                  <td>{client.account_id}</td>
-                  <td>{client.name}</td>
-                  <td>{client.contact}</td>
-                  <td>{client.address || '-'}</td>
-                  <td>{client.current_package || '-'}</td>
-                  <td>${client.package_price || 0}</td>
-                  <td>{client.package_price_nle ? `NLe ${client.package_price_nle.toFixed(2)}` : '-'}</td>
-                  <td>{client.retention_agent || '-'}</td>
-                  <td>{client.installation_date || '-'}</td>
-                  <td>{client.account_status || 'active'}</td>
-                  <td>{client.aav_value_usd ? `$${client.aav_value_usd}` : '-'}</td>
-                  <td>{getExpiresInText(client.expiry_date)}</td>
-                  <td>{client.disabled_reason || '-'}</td>
+              {filtered.length === 0 ? (
+                <tr>
+                  <td colSpan="13" style={{ textAlign: 'center' }}>No customers found</td>
                 </tr>
-              ))}
+              ) : (
+                filtered.map(client => (
+                  <tr 
+                    key={client.account_id} 
+                    onClick={() => handleRowClick(client)}
+                    style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)' }}
+                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--hover-bg, #f5f5f5)'}
+                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                  >
+                    <td>{client.account_id}</td>
+                    <td>{client.name}</td>
+                    <td>{client.contact}</td>
+                    <td>{client.address || '-'}</td>
+                    <td>{client.current_package || '-'}</td>
+                    <td>${client.package_price || 0}</td>
+                    <td>{client.package_price_nle ? `NLe ${client.package_price_nle.toFixed(2)}` : '-'}</td>
+                    <td>{client.retention_agent || '-'}</td>
+                    <td>{client.installation_date || '-'}</td>
+                    <td>{client.account_status || 'active'}</td>
+                    <td>{client.aav_value_usd ? `$${client.aav_value_usd}` : '-'}</td>
+                    <td>{getExpiresInText(client.expiry_date)}</td>
+                    <td>{client.disabled_reason || '-'}</td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>
       </div>
       
       {showModal && selectedCustomer && (
-        <div style={{
-          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          zIndex: 1000
-        }} onClick={closeModal}>
-          <div style={{
-            backgroundColor: 'var(--card-bg, white)', padding: '1.5rem', borderRadius: 'var(--radius, 8px)',
-            maxWidth: '600px', width: '90%', maxHeight: '80vh', overflowY: 'auto'
-          }} onClick={(e) => e.stopPropagation()}>
+        <div
+          style={{
+            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+            backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 1000
+          }}
+          onClick={closeModal}
+        >
+          <div
+            style={{
+              backgroundColor: 'var(--card-bg, white)', padding: '1.5rem', borderRadius: 'var(--radius, 8px)',
+              maxWidth: '600px', width: '90%', maxHeight: '80vh', overflowY: 'auto'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h3>Customer Details</h3>
               <button onClick={closeModal}>✕</button>
