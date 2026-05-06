@@ -48,24 +48,27 @@ export default function CustomersList({ user }) {
     console.log('👤 Unique agents:', uniqueAgents);
     setAgentOptions(uniqueAgents);
     
-    // Statuses - SIMPLIFIED and DIRECT
+    // STATUS – direct query, no extra filtering
     const { data: statuses, error: statusError } = await supabase
       .from('clients')
       .select('account_status')
-      .not('account_status', 'is', null);   // only exclude NULLs
-    
+      .not('account_status', 'is', null);
     if (statusError) throw statusError;
     
-    // Log every single status value as is
-    console.log('🏷️ ALL raw status values (including duplicates):', statuses.map(s => s.account_status));
+    console.log('🏷️ Raw statuses from DB (all rows):', statuses.map(s => s.account_status));
     
-    // Get unique, trimmed, non-empty values
+    // Get unique values, trim, and remove empty strings
     let uniqueStatuses = [...new Set(statuses?.map(s => s.account_status?.trim()).filter(Boolean))];
-    console.log('🏷️ Unique statuses after Set & trim:', uniqueStatuses);
+    console.log('🏷️ Unique statuses before standardization:', uniqueStatuses);
     
-    // If you explicitly want only 'Active' and 'Disabled' (capitalized), you can standardize:
-    // But let's keep them as they appear in DB for now.
-    setStatusOptions(uniqueStatuses);
+    // Optional: Standardize to "Active" and "Disabled" (capitalized)
+    // This ensures the dropdown shows only these two, regardless of original casing
+    let standardized = uniqueStatuses.map(s => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase());
+    standardized = [...new Set(standardized)];
+    standardized = standardized.filter(s => s === 'Active' || s === 'Disabled');
+    console.log('🏷️ Final status dropdown options:', standardized);
+    
+    setStatusOptions(standardized);
     
   } catch (err) {
     console.error('💥 Error in fetchDropdownOptions:', err);
