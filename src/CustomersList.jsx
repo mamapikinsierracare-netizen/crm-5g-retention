@@ -26,56 +26,52 @@ export default function CustomersList({ user }) {
   
   // Fetch dropdown options (Packages, Agents, Status) from database
   const fetchDropdownOptions = async () => {
-    console.log('🔍 fetchDropdownOptions: Starting...');
-    try {
-      // Packages query
-      const { data: packages, error: pkgError } = await supabase
-        .from('clients')
-        .select('current_package')
-        .not('current_package', 'is', null);
-      
-      if (pkgError) {
-        console.error('❌ Error fetching packages:', pkgError);
-        throw pkgError;
-      }
-      
-      console.log('📦 Raw packages from DB:', packages?.length, 'rows');
-      console.log('📦 First 5 package values:', packages?.slice(0, 5).map(p => p.current_package));
-      
-      let uniquePackages = [...new Set(packages?.map(p => p.current_package?.trim()).filter(Boolean))];
-      console.log('📦 Unique packages after Set & trim:', uniquePackages);
-      setPackageOptions(uniquePackages);
-      
-      // Agents query
-      const { data: agents, error: agentError } = await supabase
-        .from('clients')
-        .select('retention_agent')
-        .not('retention_agent', 'is', null);
-      
-      if (agentError) throw agentError;
-      
-      let uniqueAgents = [...new Set(agents?.map(a => a.retention_agent?.trim()).filter(Boolean))];
-      console.log('👤 Unique agents:', uniqueAgents);
-      setAgentOptions(uniqueAgents);
-      
-      // Statuses query
-      const { data: statuses, error: statusError } = await supabase
-        .from('clients')
-        .select('account_status')
-        .not('account_status', 'is', null);
-      
-      if (statusError) throw statusError;
-      
-      let uniqueStatuses = [...new Set(statuses?.map(s => s.account_status?.trim()).filter(Boolean))];
-      console.log('🏷️ Raw statuses from DB:', statuses?.slice(0, 5).map(s => s.account_status));
-      console.log('🏷️ Unique statuses after Set & trim:', uniqueStatuses);
-      setStatusOptions(uniqueStatuses);
-      
-    } catch (err) {
-      console.error('💥 Error in fetchDropdownOptions:', err);
-    }
-    console.log('🔍 fetchDropdownOptions: Finished');
-  };
+  console.log('🔍 fetchDropdownOptions: Starting...');
+  try {
+    // Packages
+    const { data: packages, error: pkgError } = await supabase
+      .from('clients')
+      .select('current_package')
+      .not('current_package', 'is', null);
+    if (pkgError) throw pkgError;
+    let uniquePackages = [...new Set(packages?.map(p => p.current_package?.trim()).filter(Boolean))];
+    console.log('📦 Unique packages:', uniquePackages);
+    setPackageOptions(uniquePackages);
+    
+    // Agents
+    const { data: agents, error: agentError } = await supabase
+      .from('clients')
+      .select('retention_agent')
+      .not('retention_agent', 'is', null);
+    if (agentError) throw agentError;
+    let uniqueAgents = [...new Set(agents?.map(a => a.retention_agent?.trim()).filter(Boolean))];
+    console.log('👤 Unique agents:', uniqueAgents);
+    setAgentOptions(uniqueAgents);
+    
+    // Statuses - SIMPLIFIED and DIRECT
+    const { data: statuses, error: statusError } = await supabase
+      .from('clients')
+      .select('account_status')
+      .not('account_status', 'is', null);   // only exclude NULLs
+    
+    if (statusError) throw statusError;
+    
+    // Log every single status value as is
+    console.log('🏷️ ALL raw status values (including duplicates):', statuses.map(s => s.account_status));
+    
+    // Get unique, trimmed, non-empty values
+    let uniqueStatuses = [...new Set(statuses?.map(s => s.account_status?.trim()).filter(Boolean))];
+    console.log('🏷️ Unique statuses after Set & trim:', uniqueStatuses);
+    
+    // If you explicitly want only 'Active' and 'Disabled' (capitalized), you can standardize:
+    // But let's keep them as they appear in DB for now.
+    setStatusOptions(uniqueStatuses);
+    
+  } catch (err) {
+    console.error('💥 Error in fetchDropdownOptions:', err);
+  }
+  console.log('🔍 fetchDropdownOptions: Finished');
+};
   
   // Fetch all clients once
   const fetchClients = async () => {
