@@ -6,12 +6,10 @@ export default function CustomersList({ user }) {
   const [clients, setClients] = useState([]);
   const [loading, setLoading] = useState(true);
   
-  // Dropdown options (unique values from DB)
   const [packageOptions, setPackageOptions] = useState([]);
   const [agentOptions, setAgentOptions] = useState([]);
   const [statusOptions, setStatusOptions] = useState([]);
   
-  // Filters
   const [filters, setFilters] = useState({
     account_id: '',
     name: '',
@@ -23,14 +21,13 @@ export default function CustomersList({ user }) {
     globalSearch: ''
   });
   
-  // Modal state
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [showModal, setShowModal] = useState(false);
   
-  // Fetch unique values for each filter dropdown from the actual table
+  // Fetch dropdown options
   const fetchDropdownOptions = async () => {
     try {
-      // PACKAGE column
+      // Packages: get all distinct, trim spaces, keep original case
       const { data: packages } = await supabase
         .from('clients')
         .select('current_package')
@@ -38,9 +35,10 @@ export default function CustomersList({ user }) {
         .neq('current_package', '')
         .order('current_package');
       let uniquePackages = [...new Set(packages?.map(p => p.current_package?.trim()).filter(Boolean))];
+      console.log('🔍 Distinct PACKAGE values found in database:', uniquePackages);
       setPackageOptions(uniquePackages);
       
-      // RETENTION AGENT column
+      // Agents
       const { data: agents } = await supabase
         .from('clients')
         .select('retention_agent')
@@ -50,21 +48,26 @@ export default function CustomersList({ user }) {
       let uniqueAgents = [...new Set(agents?.map(a => a.retention_agent?.trim()).filter(Boolean))];
       setAgentOptions(uniqueAgents);
       
-      // STATUS column (account_status)
+      // Statuses: standardize to 'Active' and 'Disabled' (case-insensitive)
       const { data: statuses } = await supabase
         .from('clients')
         .select('account_status')
         .not('account_status', 'is', null)
-        .neq('account_status', '')
-        .order('account_status');
-      let uniqueStatuses = [...new Set(statuses?.map(s => s.account_status?.trim()).filter(Boolean))];
-      setStatusOptions(uniqueStatuses);
+        .neq('account_status', '');
+      let raw = [...new Set(statuses?.map(s => s.account_status?.trim()).filter(Boolean))];
+      console.log('🔍 Raw distinct STATUS values:', raw);
+      // Convert each to capitalized form (Active / Disabled)
+      let standardized = raw.map(s => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase());
+      standardized = [...new Set(standardized)];
+      // Ensure only 'Active' and 'Disabled' appear (filter out any unexpected)
+      standardized = standardized.filter(s => s === 'Active' || s === 'Disabled');
+      setStatusOptions(standardized);
+      console.log('✅ Standardized STATUS dropdown options:', standardized);
     } catch (err) {
-      console.error('Error fetching filter options:', err);
+      console.error(err);
     }
   };
   
-  // Fetch all clients
   const fetchClients = async () => {
     setLoading(true);
     const { data, error } = await supabase
@@ -83,11 +86,11 @@ export default function CustomersList({ user }) {
     fetchDropdownOptions();
   }, []);
   
-  // FILTER LOGIC – exact match after trimming, like Excel/Google Sheets
+  // Filtered clients
   const filtered = useMemo(() => {
     let result = [...clients];
     
-    // Text filters (contains, case-insensitive)
+    // Text filters (case-insensitive contains)
     if (filters.account_id.trim()) {
       const search = filters.account_id.trim().toLowerCase();
       result = result.filter(c => c.account_id.toLowerCase().includes(search));
@@ -105,21 +108,24 @@ export default function CustomersList({ user }) {
       result = result.filter(c => (c.address || '').toLowerCase().includes(search));
     }
     
-    // Dropdown filters – EXACT match after trimming (case-sensitive but trimmed)
+    // Package filter (exact match after trim, case-sensitive).
+    // If you want case-insensitive package filtering, change to .toLowerCase() comparison.
     if (filters.current_package) {
       const selected = filters.current_package.trim();
       result = result.filter(c => (c.current_package || '').trim() === selected);
     }
+    // Agent filter (exact match after trim)
     if (filters.retention_agent) {
       const selected = filters.retention_agent.trim();
       result = result.filter(c => (c.retention_agent || '').trim() === selected);
     }
+    // Status filter – case-insensitive because dropdown shows 'Active' but DB may have 'active'
     if (filters.account_status) {
-      const selected = filters.account_status.trim();
-      result = result.filter(c => (c.account_status || '').trim() === selected);
+      const selected = filters.account_status.trim().toLowerCase();
+      result = result.filter(c => (c.account_status || '').trim().toLowerCase() === selected);
     }
     
-    // Global search across all major text fields
+    // Global search
     if (filters.globalSearch.trim()) {
       const search = filters.globalSearch.trim().toLowerCase();
       result = result.filter(c =>
@@ -154,7 +160,6 @@ export default function CustomersList({ user }) {
     });
   };
   
-  // Export to CSV
   const exportToCSV = () => {
     if (filtered.length === 0) {
       alert('No data to export');
@@ -200,8 +205,7 @@ export default function CustomersList({ user }) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const expiry = new Date(expiryDate);
-    const diffTime = expiry - today;
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    const diffDays = Math.ceil((expiry - today) / (1000 * 60 * 60 * 24));
     if (diffDays < 0) return 'Expired';
     if (diffDays === 0) return 'Today';
     return `${diffDays} days`;
@@ -221,7 +225,6 @@ export default function CustomersList({ user }) {
   
   return (
     <div>
-      {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
         <h2>Customers</h2>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -230,19 +233,17 @@ export default function CustomersList({ user }) {
         </div>
       </div>
       
-      {/* Global Search Box */}
       <div style={{ marginBottom: '1rem' }}>
         <input
           type="text"
           name="globalSearch"
-          placeholder="Search across all columns (Account ID, Name, Phone, Address, Package, Agent, Status)..."
+          placeholder="Search across all columns..."
           value={filters.globalSearch}
           onChange={handleFilterChange}
           style={{ width: '100%', padding: '0.5rem', fontSize: '1rem' }}
         />
       </div>
       
-      {/* Column Filters with Headings - exactly like Excel */}
       <div className="table-container" style={{ marginBottom: '1rem', padding: '1rem' }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '0.5rem' }}>
           <div>
@@ -291,7 +292,6 @@ export default function CustomersList({ user }) {
         </div>
       </div>
       
-      {/* Customers Table */}
       <div className="table-container">
         <div style={{ overflowX: 'auto' }}>
           <table style={{ minWidth: '1200px' }}>
@@ -334,7 +334,6 @@ export default function CustomersList({ user }) {
         </div>
       </div>
       
-      {/* Modal */}
       {showModal && selectedCustomer && (
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
