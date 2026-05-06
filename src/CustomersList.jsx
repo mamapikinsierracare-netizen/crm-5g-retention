@@ -8,7 +8,7 @@ export default function CustomersList({ user }) {
   
   const [packageOptions, setPackageOptions] = useState([]);
   const [agentOptions, setAgentOptions] = useState([]);
-  const [statusOptions, setStatusOptions] = useState([]);
+  const [statusOptions, setStatusOptions] = useState(['Active', 'Disabled']);
   
   const [filters, setFilters] = useState({
     account_id: '',
@@ -24,82 +24,65 @@ export default function CustomersList({ user }) {
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [showModal, setShowModal] = useState(false);
   
-  // Fetch dropdown options (Packages, Agents, Status) from database
   const fetchDropdownOptions = async () => {
-  console.log('🔍 fetchDropdownOptions: Starting...');
-  try {
-    // Packages
-    const { data: packages, error: pkgError } = await supabase
-      .from('clients')
-      .select('current_package')
-      .not('current_package', 'is', null);
-    if (pkgError) throw pkgError;
-    let uniquePackages = [...new Set(packages?.map(p => p.current_package?.trim()).filter(Boolean))];
-    console.log('📦 Unique packages:', uniquePackages);
-    setPackageOptions(uniquePackages);
-    
-    // Agents
-    const { data: agents, error: agentError } = await supabase
-      .from('clients')
-      .select('retention_agent')
-      .not('retention_agent', 'is', null);
-    if (agentError) throw agentError;
-    let uniqueAgents = [...new Set(agents?.map(a => a.retention_agent?.trim()).filter(Boolean))];
-    console.log('👤 Unique agents:', uniqueAgents);
-    setAgentOptions(uniqueAgents);
-    
-    // STATUS – direct query, no extra filtering
-    const { data: statuses, error: statusError } = await supabase
-      .from('clients')
-      .select('account_status')
-      .not('account_status', 'is', null);
-    if (statusError) throw statusError;
-    
-    console.log('🏷️ Raw statuses from DB (all rows):', statuses.map(s => s.account_status));
-    
-    // Get unique values, trim, and remove empty strings
-    let uniqueStatuses = [...new Set(statuses?.map(s => s.account_status?.trim()).filter(Boolean))];
-    console.log('🏷️ Unique statuses before standardization:', uniqueStatuses);
-    
-    // Optional: Standardize to "Active" and "Disabled" (capitalized)
-    // This ensures the dropdown shows only these two, regardless of original casing
-    let standardized = uniqueStatuses.map(s => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase());
-    standardized = [...new Set(standardized)];
-    standardized = standardized.filter(s => s === 'Active' || s === 'Disabled');
-    console.log('🏷️ Final status dropdown options:', standardized);
-    
-    setStatusOptions(standardized);
-    
-  } catch (err) {
-    console.error('💥 Error in fetchDropdownOptions:', err);
-  }
-  console.log('🔍 fetchDropdownOptions: Finished');
-};
+    try {
+      // Packages
+      const { data: packages } = await supabase
+        .from('clients')
+        .select('current_package')
+        .not('current_package', 'is', null);
+      let uniquePackages = [...new Set(packages?.map(p => p.current_package?.trim()).filter(Boolean))];
+      setPackageOptions(uniquePackages);
+      
+      // Agents
+      const { data: agents } = await supabase
+        .from('clients')
+        .select('retention_agent')
+        .not('retention_agent', 'is', null);
+      let uniqueAgents = [...new Set(agents?.map(a => a.retention_agent?.trim()).filter(Boolean))];
+      setAgentOptions(uniqueAgents);
+      
+      // Status - keep fallback but verify DB
+      const { data: statuses } = await supabase
+        .from('clients')
+        .select('account_status')
+        .not('account_status', 'is', null);
+      
+      let rawStatuses = [...new Set(statuses?.map(s => s.account_status?.trim()).filter(Boolean))];
+      let dbHasActive = rawStatuses.some(s => s.toLowerCase() === 'active');
+      let dbHasDisabled = rawStatuses.some(s => s.toLowerCase() === 'disabled');
+      
+      if (dbHasActive && dbHasDisabled) {
+        setStatusOptions(['Active', 'Disabled']);
+      } else if (dbHasActive) {
+        setStatusOptions(['Active']);
+      } else if (dbHasDisabled) {
+        setStatusOptions(['Disabled']);
+      } else {
+        setStatusOptions(rawStatuses);
+      }
+    } catch (err) {
+      console.error(err);
+      setStatusOptions(['Active', 'Disabled']);
+    }
+  };
   
-  // Fetch all clients once
   const fetchClients = async () => {
     setLoading(true);
     const { data, error } = await supabase
       .from('clients')
       .select('*')
       .order('created_at', { ascending: false });
-    if (error) {
-      console.error(error);
-    } else {
-      setClients(data || []);
-    }
+    if (error) console.error(error);
+    else setClients(data || []);
     setLoading(false);
   };
   
   useEffect(() => {
-    // Safe to call async state-setting functions on mount.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchClients();
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchDropdownOptions();
   }, []);
   
-  // Filtered clients
   const filtered = useMemo(() => {
     let result = [...clients];
     
@@ -128,8 +111,8 @@ export default function CustomersList({ user }) {
       result = result.filter(c => (c.retention_agent || '').trim() === selected);
     }
     if (filters.account_status) {
-      const selected = filters.account_status.trim();
-      result = result.filter(c => (c.account_status || '').trim() === selected);
+      const selected = filters.account_status.trim().toLowerCase();
+      result = result.filter(c => (c.account_status || '').trim().toLowerCase() === selected);
     }
     if (filters.globalSearch.trim()) {
       const search = filters.globalSearch.trim().toLowerCase();
@@ -270,27 +253,21 @@ export default function CustomersList({ user }) {
             <div style={{ fontSize: '0.7rem', fontWeight: 'bold', marginBottom: '0.25rem', color: 'var(--text-muted)' }}>PACKAGE</div>
             <select name="current_package" value={filters.current_package} onChange={handleFilterChange}>
               <option value="">All Packages</option>
-              {packageOptions.map(pkg => (
-                <option key={pkg} value={pkg}>{pkg}</option>
-              ))}
+              {packageOptions.map(pkg => <option key={pkg} value={pkg}>{pkg}</option>)}
             </select>
           </div>
           <div>
             <div style={{ fontSize: '0.7rem', fontWeight: 'bold', marginBottom: '0.25rem', color: 'var(--text-muted)' }}>RETENTION AGENT</div>
             <select name="retention_agent" value={filters.retention_agent} onChange={handleFilterChange}>
               <option value="">All Agents</option>
-              {agentOptions.map(agent => (
-                <option key={agent} value={agent}>{agent}</option>
-              ))}
+              {agentOptions.map(agent => <option key={agent} value={agent}>{agent}</option>)}
             </select>
           </div>
           <div>
             <div style={{ fontSize: '0.7rem', fontWeight: 'bold', marginBottom: '0.25rem', color: 'var(--text-muted)' }}>STATUS</div>
             <select name="account_status" value={filters.account_status} onChange={handleFilterChange}>
               <option value="">All Status</option>
-              {statusOptions.map(status => (
-                <option key={status} value={status}>{status}</option>
-              ))}
+              {statusOptions.map(status => <option key={status} value={status}>{status}</option>)}
             </select>
           </div>
         </div>
@@ -301,9 +278,19 @@ export default function CustomersList({ user }) {
           <table style={{ minWidth: '1200px' }}>
             <thead>
               <tr>
-                <th>Account ID</th><th>Name</th><th>Phone</th><th>Address</th><th>Package</th>
-                <th>Price (USD)</th><th>Price (NLe)</th><th>Retention Agent</th><th>Installation Date</th>
-                <th>Status</th><th>AAV (USD)</th><th>Expires In</th><th>Disabled Reason</th>
+                <th>Account ID</th>
+                <th>Name</th>
+                <th>Phone</th>
+                <th>Address</th>
+                <th>Package</th>
+                <th>Price (USD)</th>
+                <th>Price (NLe)</th>
+                <th>Retention Agent</th>
+                <th>Installation Date</th>
+                <th>Status</th>
+                <th>AAV (USD)</th>
+                <th>Expires In</th>
+                <th>Disabled Reason</th>
               </tr>
             </thead>
             <tbody>
@@ -313,8 +300,8 @@ export default function CustomersList({ user }) {
                 </tr>
               ) : (
                 filtered.map(client => (
-                  <tr 
-                    key={client.account_id} 
+                  <tr
+                    key={client.account_id}
                     onClick={() => handleRowClick(client)}
                     style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)' }}
                     onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--hover-bg, #f5f5f5)'}
