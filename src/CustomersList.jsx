@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from './supabase';
-import CallForm from './components/CallForm'; // adjust path if CallForm is inside components
+import CallForm from './CallForm';// adjust path if CallForm is inside components
 
 export default function CustomersList({ user }) {
   const [clients, setClients] = useState([]);
