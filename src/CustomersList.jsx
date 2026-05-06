@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from './supabase';
-import CallForm from './CallForm';// adjust path if CallForm is inside components
+import CallForm from './CallForm'; // adjust path if CallForm is inside components
 
 export default function CustomersList({ user }) {
   const [clients, setClients] = useState([]);
@@ -20,7 +20,7 @@ export default function CustomersList({ user }) {
     current_package: '',
     retention_agent: '',
     account_status: '',
-    globalSearch: ''   // NEW: unified search box
+    globalSearch: ''   // unified search box
   });
   
   // Modal state
@@ -50,7 +50,7 @@ export default function CustomersList({ user }) {
       let uniqueAgents = [...new Set(agents?.map(a => a.retention_agent?.trim()).filter(Boolean))];
       setAgentOptions(uniqueAgents);
       
-      // Statuses (distinct account_status from clients table)
+      // Statuses
       const { data: statuses } = await supabase
         .from('clients')
         .select('account_status')
@@ -76,7 +76,6 @@ export default function CustomersList({ user }) {
     setLoading(false);
   };
   
-  // MODIFIED: useEffect with eslint-disable comments to suppress warnings
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchClients();
@@ -84,41 +83,47 @@ export default function CustomersList({ user }) {
     fetchDropdownOptions();
   }, []);
   
-  // Compute filtered clients based on all filters + global search
+  // IMPROVED FILTERING LOGIC – trims values and handles spaces
   const filtered = useMemo(() => {
     let result = [...clients];
     
-    // Per‑field filters
-    if (filters.account_id) {
-      result = result.filter(c => c.account_id.toLowerCase().includes(filters.account_id.toLowerCase()));
+    // Text filters (case‑insensitive, partial match)
+    if (filters.account_id.trim()) {
+      const search = filters.account_id.trim().toLowerCase();
+      result = result.filter(c => c.account_id.toLowerCase().includes(search));
     }
-    if (filters.name) {
-      result = result.filter(c => c.name.toLowerCase().includes(filters.name.toLowerCase()));
+    if (filters.name.trim()) {
+      const search = filters.name.trim().toLowerCase();
+      result = result.filter(c => c.name.toLowerCase().includes(search));
     }
-    if (filters.contact) {
-      result = result.filter(c => c.contact.toLowerCase().includes(filters.contact.toLowerCase()));
+    if (filters.contact.trim()) {
+      const search = filters.contact.trim().toLowerCase();
+      result = result.filter(c => c.contact.toLowerCase().includes(search));
     }
-    if (filters.address) {
-      result = result.filter(c => (c.address || '').toLowerCase().includes(filters.address.toLowerCase()));
-    }
-    if (filters.current_package) {
-      result = result.filter(c => (c.current_package || '') === filters.current_package);
-    }
-    if (filters.retention_agent) {
-      result = result.filter(c => (c.retention_agent || '') === filters.retention_agent);
-    }
-    if (filters.account_status) {
-      result = result.filter(c => (c.account_status || '') === filters.account_status);
+    if (filters.address.trim()) {
+      const search = filters.address.trim().toLowerCase();
+      result = result.filter(c => (c.address || '').toLowerCase().includes(search));
     }
     
-    // Global search across account_id, name, contact, address
+    // Dropdown filters – exact match after trimming both sides
+    if (filters.current_package) {
+      result = result.filter(c => (c.current_package || '').trim() === filters.current_package);
+    }
+    if (filters.retention_agent) {
+      result = result.filter(c => (c.retention_agent || '').trim() === filters.retention_agent);
+    }
+    if (filters.account_status) {
+      result = result.filter(c => (c.account_status || '').trim() === filters.account_status);
+    }
+    
+    // Global search (Account ID, Name, Phone, Address)
     if (filters.globalSearch.trim()) {
-      const searchLower = filters.globalSearch.toLowerCase();
+      const search = filters.globalSearch.trim().toLowerCase();
       result = result.filter(c =>
-        c.account_id.toLowerCase().includes(searchLower) ||
-        c.name.toLowerCase().includes(searchLower) ||
-        c.contact.toLowerCase().includes(searchLower) ||
-        (c.address || '').toLowerCase().includes(searchLower)
+        c.account_id.toLowerCase().includes(search) ||
+        c.name.toLowerCase().includes(search) ||
+        c.contact.toLowerCase().includes(search) ||
+        (c.address || '').toLowerCase().includes(search)
       );
     }
     
@@ -127,7 +132,7 @@ export default function CustomersList({ user }) {
   
   const handleFilterChange = (e) => {
     const { name, value } = e.target;
-    setFilters({ ...filters, [name]: value });
+    setFilters(prev => ({ ...prev, [name]: value }));
   };
   
   const clearFilters = () => {
@@ -222,7 +227,7 @@ export default function CustomersList({ user }) {
         </div>
       </div>
       
-      {/* NEW: Unified Search Box */}
+      {/* Unified Search Box */}
       <div style={{ marginBottom: '1rem' }}>
         <input
           type="text"
