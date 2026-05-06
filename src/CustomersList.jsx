@@ -26,6 +26,7 @@ export default function CustomersList({ user }) {
   
   const fetchDropdownOptions = async () => {
     try {
+      // Fetch unique package options
       const { data: packages } = await supabase
         .from('clients')
         .select('current_package')
@@ -33,6 +34,7 @@ export default function CustomersList({ user }) {
       let uniquePackages = [...new Set(packages?.map(p => p.current_package?.trim()).filter(Boolean))];
       setPackageOptions(uniquePackages);
       
+      // Fetch unique agent options
       const { data: agents } = await supabase
         .from('clients')
         .select('retention_agent')
@@ -40,17 +42,9 @@ export default function CustomersList({ user }) {
       let uniqueAgents = [...new Set(agents?.map(a => a.retention_agent?.trim()).filter(Boolean))];
       setAgentOptions(uniqueAgents);
       
-      const { data: statuses } = await supabase
-        .from('clients')
-        .select('account_status')
-        .not('account_status', 'is', null);
-      let uniqueStatuses = [...new Set(statuses?.map(s => s.account_status?.trim()).filter(Boolean))];
-      let dbHasActive = uniqueStatuses.some(s => s.toLowerCase() === 'active');
-      let dbHasDisabled = uniqueStatuses.some(s => s.toLowerCase() === 'disabled');
-      if (dbHasActive && dbHasDisabled) setStatusOptions(['Active', 'Disabled']);
-      else if (dbHasActive) setStatusOptions(['Active']);
-      else if (dbHasDisabled) setStatusOptions(['Disabled']);
-      else setStatusOptions(uniqueStatuses);
+      // PERMANENT FIX: Always show both Active and Disabled in the status dropdown
+      // (No database query needed – guarantees the dropdown works regardless of data)
+      setStatusOptions(['Active', 'Disabled']);
     } catch (err) {
       console.error(err);
     }
