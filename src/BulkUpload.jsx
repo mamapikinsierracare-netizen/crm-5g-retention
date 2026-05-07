@@ -1,6 +1,11 @@
 import { useState } from 'react'
 import { supabase } from './supabase'
-import Papa from 'papaparse'
+// Use CDN-loaded global Papa
+const Papa = window.Papa;
+if (!Papa) {
+  alert("CSV library failed to load. Please refresh the page and contact support.");
+  throw new Error("PapaParse missing");
+}
 
 // Robust date parser: supports DD/MM/YYYY, DD-MM-YYYY, YYYY-MM-DD
 function parseDate(dateStr) {
