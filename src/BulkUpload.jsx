@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { supabase } from './supabase'
 
-// Helper: load PapaParse dynamically from CDN
+// Helper: ensure PapaParse is loaded (CDN)
 let papaLoadPromise = null
 function getPapa() {
   if (window.Papa) return Promise.resolve(window.Papa)
@@ -16,7 +16,7 @@ function getPapa() {
   return papaLoadPromise
 }
 
-// Robust date parser (same as before)
+// Robust date parser (unchanged)
 function parseDate(dateStr) {
   if (!dateStr || dateStr === '0000-00-00') return null
   let trimmed = dateStr.trim()
@@ -101,12 +101,7 @@ export default function BulkUpload({ user }) {
 
   const handleFileUpload = async (event) => {
     const file = event.target.files[0]
-    if (!file) {
-      alert("No file selected")
-      return
-    }
-    alert(`File selected: ${file.name}, size: ${file.size} bytes`)
-
+    if (!file) return
     if (!file.name.endsWith('.csv')) {
       alert('Please upload a CSV file')
       return
@@ -117,198 +112,199 @@ export default function BulkUpload({ user }) {
     setResult(null)
     setBackupData(null)
 
-    // Wait for PapaParse
+    // Load PapaParse
     let Papa
     try {
-      alert("Loading PapaParse...")
       Papa = await getPapa()
-      alert("PapaParse loaded successfully")
     } catch (err) {
-      alert('CSV parsing library failed to load: ' + err.message)
+      alert('CSV parsing library failed to load. Please refresh and try again.')
       console.error(err)
       setUploading(false)
       return
     }
 
-    alert("Starting Papa.parse...")
-    Papa.parse(file, {
-      header: true,
-      skipEmptyLines: true,
-      complete: async (results) => {
-        alert(`Parse complete. Rows found: ${results.data.length}`)
-        const rows = results.data
-        const totalRows = rows.length
-        let errorList = []
-        let skippedMissing = 0
-        let dateErrors = 0
+    // Read file manually first (this works reliably on Vercel)
+    const reader = new FileReader()
+    reader.onload = async (e) => {
+      const csvText = e.target.result
+      // Now parse the text with PapaParse
+      Papa.parse(csvText, {
+        header: true,
+        skipEmptyLines: true,
+        complete: async (results) => {
+          const rows = results.data
+          const totalRows = rows.length
+          let errorList = []
+          let skippedMissing = 0
+          let dateErrors = 0
 
-        const clientMap = new Map()
-        const allAccountIds = []
+          const clientMap = new Map()
+          const allAccountIds = []
 
-        for (let i = 0; i < totalRows; i++) {
-          const row = rows[i]
-          const accountId = row['Account ID'] || row.account_id
-          const name = row['Name'] || row.name
-          const contact = row['Phone/Contact'] || row.contact
-          if (!accountId || !name || !contact) {
-            skippedMissing++
-            errorList.push(`Row ${i+1}: Missing required field (Account ID, Name, or Contact)`)
-            continue
-          }
-
-          const rawInstallDate = row['Installation Date'] || row.installation_date
-          const formattedInstallDate = parseDate(rawInstallDate)
-          if (rawInstallDate && !formattedInstallDate) {
-            dateErrors++
-            errorList.push(`Row ${i+1}: Invalid installation date "${rawInstallDate}"`)
-          }
-
-          const rawExpiryDate = row['Expiry Date'] || row.expiry_date
-          const formattedExpiryDate = parseDate(rawExpiryDate)
-          if (rawExpiryDate && !formattedExpiryDate) {
-            dateErrors++
-            errorList.push(`Row ${i+1}: Invalid expiry date "${rawExpiryDate}"`)
-          }
-
-          let aavValue = null
-          const rawAav = row['AAV (USD)'] || row.aav_value_usd
-          if (rawAav !== undefined && rawAav !== '') {
-            const parsed = parseFloat(rawAav)
-            if (!isNaN(parsed)) aavValue = parsed
-          }
-
-          let accountStatus = 'active'
-          const rawStatus = row['Account Status'] || row.account_status
-          if (rawStatus) {
-            const statusLower = rawStatus.trim().toLowerCase()
-            if (statusLower === 'disabled') accountStatus = 'disabled'
-            else if (statusLower === 'active') accountStatus = 'active'
-          }
-
-          const disabledFor = row['Disabled Reason'] || row.disabled_for || row.disabled_reason
-
-          const client = {
-            account_id: accountId,
-            name: name,
-            contact: contact,
-            address: row['Address'] || row.address,
-            current_package: row['Service Tag/Package Type'] || row.current_package,
-            package_price: parseFloat(row['Price'] || row.package_price) || 0,
-            retention_agent: row['Retention Agent'] || row.retention_agent,
-            installation_date: formattedInstallDate,
-            expiry_date: formattedExpiryDate,
-            aav_value_usd: aavValue,
-            account_status: accountStatus,
-            disabled_for: disabledFor,
-            updated_by: user.email,
-            updated_at: new Date().toISOString(),
-          }
-          clientMap.set(accountId, client)
-          allAccountIds.push(accountId)
-        }
-
-        alert(`Processed ${clientMap.size} valid rows.`)
-
-        if (clientMap.size === 0) {
-          setResult({ inserted: 0, updated: 0, errors: errorList.length, errorDetails: errorList, skippedMissing, dateErrors })
-          setUploading(false)
-          return
-        }
-
-        let existingIds = []
-        let backup = null
-        if (updateMode) {
-          alert("Fetching existing records from database...")
-          const existingRecords = await fetchExistingRecords(allAccountIds)
-          existingIds = existingRecords.map(r => r.account_id)
-          const existingMeta = new Map()
-          existingRecords.forEach(rec => existingMeta.set(rec.account_id, { created_at: rec.created_at, created_by: rec.created_by }))
-
-          for (const [accId, client] of clientMap.entries()) {
-            if (existingMeta.has(accId)) {
-              const meta = existingMeta.get(accId)
-              client.created_at = meta.created_at
-              client.created_by = meta.created_by
-            } else {
-              client.created_at = new Date().toISOString()
-              client.created_by = user.email
+          for (let i = 0; i < totalRows; i++) {
+            const row = rows[i]
+            const accountId = row['Account ID'] || row.account_id
+            const name = row['Name'] || row.name
+            const contact = row['Phone/Contact'] || row.contact
+            if (!accountId || !name || !contact) {
+              skippedMissing++
+              errorList.push(`Row ${i+1}: Missing required field (Account ID, Name, or Contact)`)
+              continue
             }
-          }
 
-          if (existingIds.length > 0) {
-            alert("Creating backup of existing records...")
-            backup = await createBackup(existingIds)
-            if (backup) setBackupData(backup)
-          }
-        } else {
-          const existingRecords = await fetchExistingRecords(allAccountIds)
-          const existingIdSet = new Set(existingRecords.map(r => r.account_id))
-          for (const accId of clientMap.keys()) {
-            if (existingIdSet.has(accId)) {
-              clientMap.delete(accId)
-              errorList.push(`Account ${accId} already exists – skipped (update mode disabled)`)
-            } else {
-              const client = clientMap.get(accId)
-              client.created_at = new Date().toISOString()
-              client.created_by = user.email
+            const rawInstallDate = row['Installation Date'] || row.installation_date
+            const formattedInstallDate = parseDate(rawInstallDate)
+            if (rawInstallDate && !formattedInstallDate) {
+              dateErrors++
+              errorList.push(`Row ${i+1}: Invalid installation date "${rawInstallDate}"`)
             }
+
+            const rawExpiryDate = row['Expiry Date'] || row.expiry_date
+            const formattedExpiryDate = parseDate(rawExpiryDate)
+            if (rawExpiryDate && !formattedExpiryDate) {
+              dateErrors++
+              errorList.push(`Row ${i+1}: Invalid expiry date "${rawExpiryDate}"`)
+            }
+
+            let aavValue = null
+            const rawAav = row['AAV (USD)'] || row.aav_value_usd
+            if (rawAav !== undefined && rawAav !== '') {
+              const parsed = parseFloat(rawAav)
+              if (!isNaN(parsed)) aavValue = parsed
+            }
+
+            let accountStatus = 'active'
+            const rawStatus = row['Account Status'] || row.account_status
+            if (rawStatus) {
+              const statusLower = rawStatus.trim().toLowerCase()
+              if (statusLower === 'disabled') accountStatus = 'disabled'
+              else if (statusLower === 'active') accountStatus = 'active'
+            }
+
+            const disabledFor = row['Disabled Reason'] || row.disabled_for || row.disabled_reason
+
+            const client = {
+              account_id: accountId,
+              name: name,
+              contact: contact,
+              address: row['Address'] || row.address,
+              current_package: row['Service Tag/Package Type'] || row.current_package,
+              package_price: parseFloat(row['Price'] || row.package_price) || 0,
+              retention_agent: row['Retention Agent'] || row.retention_agent,
+              installation_date: formattedInstallDate,
+              expiry_date: formattedExpiryDate,
+              aav_value_usd: aavValue,
+              account_status: accountStatus,
+              disabled_for: disabledFor,
+              updated_by: user.email,
+              updated_at: new Date().toISOString(),
+            }
+            clientMap.set(accountId, client)
+            allAccountIds.push(accountId)
           }
-        }
 
-        const clientsToUpsert = Array.from(clientMap.values())
-        if (clientsToUpsert.length === 0) {
-          setResult({ inserted: 0, updated: 0, errors: errorList.length, errorDetails: errorList, skippedMissing, dateErrors })
-          setUploading(false)
-          return
-        }
+          if (clientMap.size === 0) {
+            setResult({ inserted: 0, updated: 0, errors: errorList.length, errorDetails: errorList, skippedMissing, dateErrors })
+            setUploading(false)
+            return
+          }
 
-        alert(`Upserting ${clientsToUpsert.length} records in batches...`)
-        const batchSize = 50
-        let totalInserted = 0
-        let totalUpdated = 0
-        for (let i = 0; i < clientsToUpsert.length; i += batchSize) {
-          const batch = clientsToUpsert.slice(i, i + batchSize)
-          const { error } = await supabase
-            .from('clients')
-            .upsert(batch, { onConflict: 'account_id', ignoreDuplicates: false })
-          if (error) {
-            errorList.push(`Batch error: ${error.message}`)
-          } else {
-            if (updateMode) {
-              for (const client of batch) {
-                if (existingIds.includes(client.account_id)) totalUpdated++
-                else totalInserted++
+          let existingIds = []
+          let backup = null
+          if (updateMode) {
+            const existingRecords = await fetchExistingRecords(allAccountIds)
+            existingIds = existingRecords.map(r => r.account_id)
+            const existingMeta = new Map()
+            existingRecords.forEach(rec => existingMeta.set(rec.account_id, { created_at: rec.created_at, created_by: rec.created_by }))
+
+            for (const [accId, client] of clientMap.entries()) {
+              if (existingMeta.has(accId)) {
+                const meta = existingMeta.get(accId)
+                client.created_at = meta.created_at
+                client.created_by = meta.created_by
+              } else {
+                client.created_at = new Date().toISOString()
+                client.created_by = user.email
               }
-            } else {
-              totalInserted += batch.length
+            }
+
+            if (existingIds.length > 0) {
+              backup = await createBackup(existingIds)
+              if (backup) setBackupData(backup)
+            }
+          } else {
+            const existingRecords = await fetchExistingRecords(allAccountIds)
+            const existingIdSet = new Set(existingRecords.map(r => r.account_id))
+            for (const accId of clientMap.keys()) {
+              if (existingIdSet.has(accId)) {
+                clientMap.delete(accId)
+                errorList.push(`Account ${accId} already exists – skipped (update mode disabled)`)
+              } else {
+                const client = clientMap.get(accId)
+                client.created_at = new Date().toISOString()
+                client.created_by = user.email
+              }
             }
           }
-          setProgress(Math.round(((i + batchSize) / clientsToUpsert.length) * 100))
-        }
 
-        setResult({
-          inserted: totalInserted,
-          updated: totalUpdated,
-          errors: errorList.length,
-          errorDetails: errorList,
-          skippedMissing,
-          dateErrors,
-          totalProcessed: clientsToUpsert.length
-        })
-        setUploading(false)
-        alert("Upload complete!")
-      },
-      error: (err) => {
-        alert("Papa.parse error: " + err.message)
-        console.error('Parse error:', err)
-        setUploading(false)
-      }
-    })
+          const clientsToUpsert = Array.from(clientMap.values())
+          if (clientsToUpsert.length === 0) {
+            setResult({ inserted: 0, updated: 0, errors: errorList.length, errorDetails: errorList, skippedMissing, dateErrors })
+            setUploading(false)
+            return
+          }
+
+          const batchSize = 50
+          let totalInserted = 0
+          let totalUpdated = 0
+          for (let i = 0; i < clientsToUpsert.length; i += batchSize) {
+            const batch = clientsToUpsert.slice(i, i + batchSize)
+            const { error } = await supabase
+              .from('clients')
+              .upsert(batch, { onConflict: 'account_id', ignoreDuplicates: false })
+            if (error) {
+              errorList.push(`Batch error: ${error.message}`)
+            } else {
+              if (updateMode) {
+                for (const client of batch) {
+                  if (existingIds.includes(client.account_id)) totalUpdated++
+                  else totalInserted++
+                }
+              } else {
+                totalInserted += batch.length
+              }
+            }
+            setProgress(Math.round(((i + batchSize) / clientsToUpsert.length) * 100))
+          }
+
+          setResult({
+            inserted: totalInserted,
+            updated: totalUpdated,
+            errors: errorList.length,
+            errorDetails: errorList,
+            skippedMissing,
+            dateErrors,
+            totalProcessed: clientsToUpsert.length
+          })
+          setUploading(false)
+        },
+        error: (err) => {
+          console.error('Parse error:', err)
+          alert('Parse error: ' + err.message)
+          setUploading(false)
+        }
+      })
+    }
+    reader.onerror = () => {
+      alert('Failed to read file')
+      setUploading(false)
+    }
+    reader.readAsText(file, 'UTF-8')
   }
 
   return (
     <div className="card" style={{ maxWidth: '800px', margin: '0 auto' }}>
-      <h3>Bulk Upload Clients (CSV) – DEBUG VERSION</h3>
+      <h3>Bulk Upload Clients (CSV)</h3>
       <p>Upload a CSV file with these exact column headers:</p>
       <pre style={{ fontSize: '0.7rem', background: 'var(--bg)', padding: '0.5rem' }}>
         Account ID,Name,Phone/Contact,Address,Service Tag/Package Type,Price,Retention Agent,Installation Date,Account Status,AAV (USD),Expiry Date,Disabled Reason
