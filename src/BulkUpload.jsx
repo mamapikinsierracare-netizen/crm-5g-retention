@@ -16,7 +16,7 @@ function getPapa() {
   return papaLoadPromise
 }
 
-// Robust date parser (unchanged)
+// Robust date parser (supports DD/MM/YYYY, DD-MM-YYYY, YYYY-MM-DD)
 function parseDate(dateStr) {
   if (!dateStr || dateStr === '0000-00-00') return null
   let trimmed = dateStr.trim()
@@ -141,7 +141,7 @@ export default function BulkUpload({ user }) {
 
           for (let i = 0; i < totalRows; i++) {
             const row = rows[i]
-            // Use exact column names from your sample CSV
+            // Match exactly the header in your sample CSV
             const accountId = row['Account ID'] || row.account_id
             const name = row['Name'] || row.name
             const contact = row['Phone/Contact'] || row.contact
@@ -158,7 +158,7 @@ export default function BulkUpload({ user }) {
               errorList.push(`Row ${i+1}: Invalid installation date "${rawInstallDate}"`)
             }
 
-            // Map "Expires In" to expires_in (integer)
+            // expires_in from "Expires In" column (integer)
             let expiresIn = null
             const rawExpires = row['Expires In'] || row.expires_in
             if (rawExpires !== undefined && rawExpires !== '') {
@@ -166,11 +166,11 @@ export default function BulkUpload({ user }) {
               if (!isNaN(parsed)) expiresIn = parsed
               else {
                 numberErrors++
-                errorList.push(`Row ${i+1}: Invalid Expires In value "${rawExpires}" (must be integer)`)
+                errorList.push(`Row ${i+1}: Invalid Expires In value "${rawExpires}" (integer required)`)
               }
             }
 
-            // Map "AAV (USD)" to aav_value_usd
+            // aav_value_usd from "AAV (USD)" column
             let aavValue = null
             const rawAav = row['AAV (USD)'] || row.aav_value_usd
             if (rawAav !== undefined && rawAav !== '') {
@@ -186,7 +186,7 @@ export default function BulkUpload({ user }) {
               else if (statusLower === 'active') accountStatus = 'active'
             }
 
-            // Map "Disabled For" to disabled_for (integer)
+            // disabled_for from "Disabled For" column (integer)
             let disabledFor = null
             const rawDisabled = row['Disabled For'] || row.disabled_for
             if (rawDisabled !== undefined && rawDisabled !== '') {
@@ -194,7 +194,7 @@ export default function BulkUpload({ user }) {
               if (!isNaN(parsed)) disabledFor = parsed
               else {
                 numberErrors++
-                errorList.push(`Row ${i+1}: Invalid Disabled For value "${rawDisabled}" (must be integer)`)
+                errorList.push(`Row ${i+1}: Invalid Disabled For value "${rawDisabled}" (integer required)`)
               }
             }
 
@@ -225,7 +225,6 @@ export default function BulkUpload({ user }) {
           }
 
           let existingIds = []
-          let backup = null
           if (updateMode) {
             const existingRecords = await fetchExistingRecords(allAccountIds)
             existingIds = existingRecords.map(r => r.account_id)
@@ -244,8 +243,8 @@ export default function BulkUpload({ user }) {
             }
 
             if (existingIds.length > 0) {
-              backup = await createBackup(existingIds)
-              if (backup) setBackupData(backup)
+              const backupResult = await createBackup(existingIds)
+              if (backupResult) setBackupData(backupResult)
             }
           } else {
             const existingRecords = await fetchExistingRecords(allAccountIds)
