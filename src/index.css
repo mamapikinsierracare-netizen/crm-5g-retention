@@ -23,6 +23,8 @@
   --bg-card: #ffffff;
   --border: #e2e8f0;
   --border-light: #f1f5f9;
+  --hover-bg: #f8fafc;        /* NEW: for row hover */
+  --card-bg: #ffffff;         /* NEW: alias for modal background */
   --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.05);
   --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
   --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
@@ -50,6 +52,8 @@
   --bg-card: #1e293b;
   --border: #334155;
   --border-light: #2d3a4e;
+  --hover-bg: #334155;        /* NEW: darker hover for dark mode */
+  --card-bg: #1e293b;         /* NEW: modal background */
   --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.3);
   --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / 0.4);
   --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.4);
@@ -279,7 +283,7 @@ tr:last-child td {
   border-bottom: none;
 }
 tr:hover td {
-  background: var(--bg);
+  background: var(--hover-bg);
 }
 
 /* ----- DASHBOARD STATS GRID (modern metrics) ----- */
@@ -386,6 +390,7 @@ tr:hover td {
     margin-bottom: 0.5rem;
   }
 }
+
 /* ===== AGENT PERFORMANCE DASHBOARD STYLES ===== */
 .kpi-section {
   background: var(--bg-card);
@@ -508,6 +513,7 @@ tr:hover td {
     min-width: 60px;
   }
 }
+
 /* Status badges for Customers table */
 .status-badge {
   display: inline-block;

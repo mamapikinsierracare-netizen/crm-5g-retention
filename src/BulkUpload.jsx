@@ -35,8 +35,8 @@ export default function BulkUpload({ user }) {
   const [uploading, setUploading] = useState(false)
   const [progress, setProgress] = useState(0)
   const [result, setResult] = useState(null)
-  const [updateMode, setUpdateMode] = useState(true)      // NEW: toggle for upsert
-  const [backupData, setBackupData] = useState(null)      // NEW: store backup for undo
+  const [updateMode, setUpdateMode] = useState(true)      // toggle for upsert
+  const [backupData, setBackupData] = useState(null)      // store backup for undo
 
   // Helper: fetch existing records for the given account IDs (for backup and to decide insert/update)
   const fetchExistingRecords = async (accountIds) => {
@@ -88,7 +88,7 @@ export default function BulkUpload({ user }) {
     alert(`Restored ${success} records, ${errors} failed`)
     setBackupData(null)
     setUploading(false)
-    // Force refresh of page to show restored data? Optional.
+    // Force refresh of page to show restored data
     window.location.reload()
   }
 
@@ -132,12 +132,41 @@ export default function BulkUpload({ user }) {
             continue
           }
 
-          const rawDate = row['Installation Date'] || row.installation_date
-          const formattedDate = parseDate(rawDate)
-          if (rawDate && !formattedDate) {
+          // Parse installation date
+          const rawInstallDate = row['Installation Date'] || row.installation_date
+          const formattedInstallDate = parseDate(rawInstallDate)
+          if (rawInstallDate && !formattedInstallDate) {
             dateErrors++
-            errors.push(`Row ${i+1}: Invalid date "${rawDate}"`)
+            errors.push(`Row ${i+1}: Invalid installation date "${rawInstallDate}"`)
           }
+
+          // Parse expiry date (new)
+          const rawExpiryDate = row['Expiry Date'] || row.expiry_date
+          const formattedExpiryDate = parseDate(rawExpiryDate)
+          if (rawExpiryDate && !formattedExpiryDate) {
+            dateErrors++
+            errors.push(`Row ${i+1}: Invalid expiry date "${rawExpiryDate}"`)
+          }
+
+          // Parse AAV value (USD) – optional number
+          let aavValue = null
+          const rawAav = row['AAV (USD)'] || row.aav_value_usd
+          if (rawAav !== undefined && rawAav !== '') {
+            const parsed = parseFloat(rawAav)
+            if (!isNaN(parsed)) aavValue = parsed
+          }
+
+          // Account status: normalise to 'active' or 'disabled'
+          let accountStatus = 'active'
+          const rawStatus = row['Account Status'] || row.account_status
+          if (rawStatus) {
+            const statusLower = rawStatus.trim().toLowerCase()
+            if (statusLower === 'disabled') accountStatus = 'disabled'
+            else if (statusLower === 'active') accountStatus = 'active'
+          }
+
+          // Disabled reason (maps to database column 'disabled_for')
+          const disabledFor = row['Disabled Reason'] || row.disabled_for || row.disabled_reason
 
           const client = {
             account_id: accountId,
@@ -147,8 +176,11 @@ export default function BulkUpload({ user }) {
             current_package: row['Service Tag/Package Type'] || row.current_package,
             package_price: parseFloat(row['Price'] || row.package_price) || 0,
             retention_agent: row['Retention Agent'] || row.retention_agent,
-            installation_date: formattedDate,
-            account_status: row['Account Status'] || row.account_status || 'active',
+            installation_date: formattedInstallDate,
+            expiry_date: formattedExpiryDate,               // new field
+            aav_value_usd: aavValue,                       // new field
+            account_status: accountStatus,
+            disabled_for: disabledFor,                      // new field (replaces disabled_reason)
             updated_by: user.email,
             updated_at: new Date().toISOString(),
           }
@@ -192,7 +224,6 @@ export default function BulkUpload({ user }) {
           }
         } else {
           // Update mode OFF: only insert new records (ignore existing ones)
-          // Remove any client that already exists
           const existingRecords = await fetchExistingRecords(allAccountIds)
           const existingIdSet = new Set(existingRecords.map(r => r.account_id))
           for (const accId of clientMap.keys()) {
@@ -264,11 +295,14 @@ export default function BulkUpload({ user }) {
       <h3>Bulk Upload Clients (CSV)</h3>
       <p>Upload a CSV file with these exact column headers:</p>
       <pre style={{ fontSize: '0.7rem', background: 'var(--bg)', padding: '0.5rem' }}>
-        Account ID,Name,Phone/Contact,Address,Service Tag/Package Type,Price,Retention Agent,Installation Date,Account Status
+        Account ID,Name,Phone/Contact,Address,Service Tag/Package Type,Price,Retention Agent,Installation Date,Account Status,AAV (USD),Expiry Date,Disabled Reason
       </pre>
       <p><strong>Date format:</strong> DD/MM/YYYY, DD-MM-YYYY, or YYYY-MM-DD. Invalid dates will be ignored (left empty).</p>
+      <p><strong>Account Status:</strong> Use "active" or "disabled" (case‑insensitive). If left blank, defaults to "active".</p>
+      <p><strong>AAV (USD):</strong> A number like 500.00 (optional).</p>
+      <p><strong>Disabled Reason:</strong> Text explaining why the account was disabled (optional).</p>
 
-      {/* NEW: Toggle for update mode and Undo button */}
+      {/* Toggle for update mode and Undo button */}
       <div style={{ margin: '1rem 0', display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <input

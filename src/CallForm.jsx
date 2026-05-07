@@ -1,97 +1,118 @@
-import { useState, useEffect } from 'react'
-import { supabase } from './supabase'
+import { useState, useEffect } from 'react';
+import { supabase } from '../supabase'; // relative path from src/components to src
 
-export default function CallForm({ client, user, onCallSubmitted }) {
+export default function CallForm({ client, customer, user, onCallSubmitted, onSuccess }) {
+  // Allow either 'client' or 'customer' prop
+  const customerData = client || customer;
+  // Use either callback
+  const onSubmitCallback = onCallSubmitted || onSuccess;
+
   const [formData, setFormData] = useState({
     call_type: 'Health Check',
     disability_range: '',
     call_status_detail: '',
-    package_type: client?.current_package || '',
+    package_type: customerData?.current_package || '',
     service_status: '',
     call_outcome: '',
     response_outcome: '',
     agent_comment: '',
     invoice_requested: false,
     other_reason: '',
-  })
-  const [loading, setLoading] = useState(false)
+  });
+  const [loading, setLoading] = useState(false);
 
   // Prefill from latest activity
   useEffect(() => {
-    if (!client) return
+    if (!customerData) return;
     const fetchLatest = async () => {
       const { data } = await supabase
         .from('call_activities')
         .select('*')
-        .eq('client_account_id', client.account_id)
+        .eq('client_account_id', customerData.account_id)
         .order('call_time', { ascending: false })
-        .limit(1)
+        .limit(1);
       if (data && data.length > 0) {
-        const latest = data[0]
+        const latest = data[0];
         setFormData(prev => ({
           ...prev,
           call_type: latest.call_type,
           disability_range: latest.disability_range || '',
           call_status_detail: latest.call_status_detail || '',
-          package_type: latest.package_type || client.current_package,
+          package_type: latest.package_type || customerData.current_package,
           service_status: latest.service_status || '',
           call_outcome: latest.call_outcome || '',
           response_outcome: latest.response_outcome || '',
           agent_comment: latest.agent_comment || '',
           invoice_requested: latest.invoice_requested || false,
-        }))
+        }));
       } else {
         setFormData({
           call_type: 'Health Check',
           disability_range: '',
           call_status_detail: '',
-          package_type: client.current_package,
+          package_type: customerData.current_package,
           service_status: '',
           call_outcome: '',
           response_outcome: '',
           agent_comment: '',
           invoice_requested: false,
           other_reason: '',
-        })
+        });
       }
-    }
-    fetchLatest()
-  }, [client])
+    };
+    fetchLatest();
+  }, [customerData]);
 
   const handleChange = (e) => {
-    const { name, value, type, checked } = e.target
+    const { name, value, type, checked } = e.target;
     setFormData(prev => ({
       ...prev,
       [name]: type === 'checkbox' ? checked : value,
-    }))
-  }
+    }));
+  };
 
   const handleCallTypeChange = (e) => {
-    const newType = e.target.value
-    let newRange = ''
-    if (newType === 'Payment Reminder') newRange = '0-29 days'
-    if (newType === 'Health Check') newRange = ''
+    const newType = e.target.value;
+    let newRange = '';
+    if (newType === 'Payment Reminder') newRange = '0-29 days';
+    if (newType === 'Health Check') newRange = '';
     setFormData(prev => ({
       ...prev,
       call_type: newType,
       disability_range: newRange,
-    }))
-  }
+    }));
+  };
 
   const handleSubmit = async (e) => {
-    e.preventDefault()
-    setLoading(true)
+    e.preventDefault();
+    if (!customerData) {
+      alert('No customer selected');
+      return;
+    }
+    setLoading(true);
 
-    let finalComment = formData.agent_comment
+    // Get user email: either from prop or from auth
+    let agentEmail = user?.email;
+    if (!agentEmail) {
+      const { data: { user: authUser } } = await supabase.auth.getUser();
+      agentEmail = authUser?.email;
+    }
+    if (!agentEmail) {
+      alert('Unable to identify agent. Please log in again.');
+      setLoading(false);
+      return;
+    }
+
+    let finalComment = formData.agent_comment;
     if (formData.response_outcome === 'Other' && formData.other_reason.trim()) {
       finalComment = finalComment 
         ? `${finalComment}\n[Other: ${formData.other_reason}]`
-        : `[Other: ${formData.other_reason}]`
+        : `[Other: ${formData.other_reason}]`;
     }
 
-    // 1. Insert the call activity
+    // Insert the call activity
     const newActivity = {
-      client_account_id: client.account_id,
+      client_account_id: customerData.account_id,
       call_type: formData.call_type,
       disability_range: formData.disability_range,
       call_status_detail: formData.call_status_detail,
@@ -99,61 +120,60 @@ export default function CallForm({ client, user, onCallSubmitted }) {
       service_status: formData.service_status,
       call_outcome: formData.call_outcome,
       response_outcome: formData.response_outcome,
-      package_price_at_time: client.package_price,
+      package_price_at_time: customerData.package_price,
       agent_comment: finalComment,
-      agent_email: user.email,
+      agent_email: agentEmail,
       call_time: new Date().toISOString(),
       invoice_requested: formData.invoice_requested,
-    }
+    };
 
     const { data: callData, error: callError } = await supabase
       .from('call_activities')
       .insert([newActivity])
-      .select()
+      .select();
 
     if (callError) {
-      alert('Error saving call: ' + callError.message)
-      setLoading(false)
-      return
+      alert('Error saving call: ' + callError.message);
+      setLoading(false);
+      return;
     }
 
-    const insertedCall = callData[0]
+    const insertedCall = callData[0];
 
-    // 2. If invoice was requested, create an invoice request record
+    // If invoice was requested, create an invoice request record
     if (formData.invoice_requested && insertedCall) {
       const { error: invoiceError } = await supabase
         .from('invoice_requests')
         .insert([{
-          client_account_id: client.account_id,
+          client_account_id: customerData.account_id,
           call_activity_id: insertedCall.id,
-          requested_by: user.email,
+          requested_by: agentEmail,
           requested_at: new Date().toISOString(),
           status: 'pending',
-        }])
-
+        }]);
       if (invoiceError) {
-        console.error('Failed to create invoice request:', invoiceError)
-        alert('Call saved but invoice request failed. Please contact support.')
+        console.error('Failed to create invoice request:', invoiceError);
+        alert('Call saved but invoice request failed. Please contact support.');
       } else {
-        alert('Call saved and invoice request created.')
+        alert('Call saved and invoice request created.');
       }
     } else {
-      alert('Call saved successfully')
+      alert('Call saved successfully');
     }
 
-    onCallSubmitted() // refresh timeline
-    setFormData(prev => ({ ...prev, other_reason: '' }))
-    setLoading(false)
-  }
+    if (onSubmitCallback) onSubmitCallback(); // refresh parent
+    setFormData(prev => ({ ...prev, other_reason: '' }));
+    setLoading(false);
+  };
 
-  if (!client) return null
+  if (!customerData) return null;
 
   const showMainFields = () => {
-    if (formData.call_type === 'Health Check') return true
-    if (formData.call_type === 'Payment Reminder') return true
-    if (formData.call_type === 'Winback' && formData.disability_range) return true
-    return false
-  }
+    if (formData.call_type === 'Health Check') return true;
+    if (formData.call_type === 'Payment Reminder') return true;
+    if (formData.call_type === 'Winback' && formData.disability_range) return true;
+    return false;
+  };
 
   return (
     <div style={{ marginTop: '30px', borderTop: '1px solid #ccc', paddingTop: '20px' }}>
@@ -255,5 +275,5 @@ export default function CallForm({ client, user, onCallSubmitted }) {
         </button>
       </form>
     </div>
-  )
+  );
 }
