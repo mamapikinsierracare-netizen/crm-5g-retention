@@ -1,10 +1,19 @@
 import { useState } from 'react'
 import { supabase } from './supabase'
-// Use CDN-loaded global Papa
-const Papa = window.Papa;
-if (!Papa) {
-  alert("CSV library failed to load. Please refresh the page and contact support.");
-  throw new Error("PapaParse missing");
+
+// Helper: load PapaParse dynamically from CDN (works even if global fails)
+let papaLoadPromise = null
+function getPapa() {
+  if (window.Papa) return Promise.resolve(window.Papa)
+  if (papaLoadPromise) return papaLoadPromise
+  papaLoadPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script')
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js'
+    script.onload = () => resolve(window.Papa)
+    script.onerror = () => reject(new Error('Failed to load PapaParse'))
+    document.head.appendChild(script)
+  })
+  return papaLoadPromise
 }
 
 // Robust date parser: supports DD/MM/YYYY, DD-MM-YYYY, YYYY-MM-DD
@@ -97,7 +106,7 @@ export default function BulkUpload({ user }) {
     window.location.reload()
   }
 
-  const handleFileUpload = (event) => {
+  const handleFileUpload = async (event) => {
     const file = event.target.files[0]
     if (!file) return
     if (!file.name.endsWith('.csv')) {
@@ -110,15 +119,24 @@ export default function BulkUpload({ user }) {
     setResult(null)
     setBackupData(null)
 
+    // Wait for PapaParse to be available
+    let Papa
+    try {
+      Papa = await getPapa()
+    } catch (err) {
+      alert('CSV parsing library failed to load. Please refresh and try again.')
+      console.error(err)
+      setUploading(false)
+      return
+    }
+
     Papa.parse(file, {
       header: true,
       skipEmptyLines: true,
       complete: async (results) => {
         const rows = results.data
         const totalRows = rows.length
-        let inserted = 0
-        let updated = 0
-        let errors = []
+        let errorList = []
         let skippedMissing = 0
         let dateErrors = 0
 
@@ -133,7 +151,7 @@ export default function BulkUpload({ user }) {
           const contact = row['Phone/Contact'] || row.contact
           if (!accountId || !name || !contact) {
             skippedMissing++
-            errors.push(`Row ${i+1}: Missing required field (Account ID, Name, or Contact)`)
+            errorList.push(`Row ${i+1}: Missing required field (Account ID, Name, or Contact)`)
             continue
           }
 
@@ -142,7 +160,7 @@ export default function BulkUpload({ user }) {
           const formattedInstallDate = parseDate(rawInstallDate)
           if (rawInstallDate && !formattedInstallDate) {
             dateErrors++
-            errors.push(`Row ${i+1}: Invalid installation date "${rawInstallDate}"`)
+            errorList.push(`Row ${i+1}: Invalid installation date "${rawInstallDate}"`)
           }
 
           // Parse expiry date (new)
@@ -150,7 +168,7 @@ export default function BulkUpload({ user }) {
           const formattedExpiryDate = parseDate(rawExpiryDate)
           if (rawExpiryDate && !formattedExpiryDate) {
             dateErrors++
-            errors.push(`Row ${i+1}: Invalid expiry date "${rawExpiryDate}"`)
+            errorList.push(`Row ${i+1}: Invalid expiry date "${rawExpiryDate}"`)
           }
 
           // Parse AAV value (USD) – optional number
@@ -182,10 +200,10 @@ export default function BulkUpload({ user }) {
             package_price: parseFloat(row['Price'] || row.package_price) || 0,
             retention_agent: row['Retention Agent'] || row.retention_agent,
             installation_date: formattedInstallDate,
-            expiry_date: formattedExpiryDate,               // new field
-            aav_value_usd: aavValue,                       // new field
+            expiry_date: formattedExpiryDate,
+            aav_value_usd: aavValue,
             account_status: accountStatus,
-            disabled_for: disabledFor,                      // new field (replaces disabled_reason)
+            disabled_for: disabledFor,
             updated_by: user.email,
             updated_at: new Date().toISOString(),
           }
@@ -194,7 +212,7 @@ export default function BulkUpload({ user }) {
         }
 
         if (clientMap.size === 0) {
-          setResult({ inserted: 0, updated: 0, errors: errors.length, errorDetails: errors, skippedMissing, dateErrors })
+          setResult({ inserted: 0, updated: 0, errors: errorList.length, errorDetails: errorList, skippedMissing, dateErrors })
           setUploading(false)
           return
         }
@@ -234,7 +252,7 @@ export default function BulkUpload({ user }) {
           for (const accId of clientMap.keys()) {
             if (existingIdSet.has(accId)) {
               clientMap.delete(accId)
-              errors.push(`Account ${accId} already exists – skipped (update mode disabled)`)
+              errorList.push(`Account ${accId} already exists – skipped (update mode disabled)`)
             } else {
               const client = clientMap.get(accId)
               client.created_at = new Date().toISOString()
@@ -246,7 +264,7 @@ export default function BulkUpload({ user }) {
         // Prepare final list of clients to upsert
         const clientsToUpsert = Array.from(clientMap.values())
         if (clientsToUpsert.length === 0) {
-          setResult({ inserted: 0, updated: 0, errors: errors.length, errorDetails: errors, skippedMissing, dateErrors })
+          setResult({ inserted: 0, updated: 0, errors: errorList.length, errorDetails: errorList, skippedMissing, dateErrors })
           setUploading(false)
           return
         }
@@ -261,7 +279,7 @@ export default function BulkUpload({ user }) {
             .from('clients')
             .upsert(batch, { onConflict: 'account_id', ignoreDuplicates: false })
           if (error) {
-            errors.push(`Batch error: ${error.message}`)
+            errorList.push(`Batch error: ${error.message}`)
           } else {
             if (updateMode) {
               // With updateMode, count updates vs inserts
@@ -279,8 +297,8 @@ export default function BulkUpload({ user }) {
         setResult({
           inserted: totalInserted,
           updated: totalUpdated,
-          errors: errors.length,
-          errorDetails: errors,
+          errors: errorList.length,
+          errorDetails: errorList,
           skippedMissing,
           dateErrors,
           totalProcessed: clientsToUpsert.length
