@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { supabase } from './supabase'
 
-// Helper: load PapaParse dynamically from CDN (works even if global fails)
+// Helper: load PapaParse dynamically from CDN
 let papaLoadPromise = null
 function getPapa() {
   if (window.Papa) return Promise.resolve(window.Papa)
@@ -16,18 +16,16 @@ function getPapa() {
   return papaLoadPromise
 }
 
-// Robust date parser: supports DD/MM/YYYY, DD-MM-YYYY, YYYY-MM-DD
+// Robust date parser (same as before)
 function parseDate(dateStr) {
   if (!dateStr || dateStr === '0000-00-00') return null
   let trimmed = dateStr.trim()
-  // If already YYYY-MM-DD, validate
   if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
     const [year, month, day] = trimmed.split('-')
     const d = new Date(year, month-1, day)
     if (d.getFullYear() == year && d.getMonth() == month-1 && d.getDate() == day) return trimmed
     return null
   }
-  // Try DD/MM/YYYY or DD-MM-YYYY
   let parts
   if (trimmed.includes('/')) parts = trimmed.split('/')
   else if (trimmed.includes('-')) parts = trimmed.split('-')
@@ -49,10 +47,9 @@ export default function BulkUpload({ user }) {
   const [uploading, setUploading] = useState(false)
   const [progress, setProgress] = useState(0)
   const [result, setResult] = useState(null)
-  const [updateMode, setUpdateMode] = useState(true)      // toggle for upsert
-  const [backupData, setBackupData] = useState(null)      // store backup for undo
+  const [updateMode, setUpdateMode] = useState(true)
+  const [backupData, setBackupData] = useState(null)
 
-  // Helper: fetch existing records for the given account IDs (for backup and to decide insert/update)
   const fetchExistingRecords = async (accountIds) => {
     if (!accountIds.length) return []
     const { data, error } = await supabase
@@ -66,7 +63,6 @@ export default function BulkUpload({ user }) {
     return data
   }
 
-  // Create a full backup of all clients that will be updated (store whole objects)
   const createBackup = async (accountIds) => {
     if (!updateMode || accountIds.length === 0) return null
     const { data, error } = await supabase
@@ -80,14 +76,12 @@ export default function BulkUpload({ user }) {
     return data
   }
 
-  // Undo last bulk update (restore from backup)
   const handleUndo = async () => {
     if (!backupData || backupData.length === 0) {
       alert('No backup to restore')
       return
     }
     if (!confirm(`Restore ${backupData.length} records to their previous state? This cannot be undone.`)) return
-
     setUploading(true)
     let success = 0
     let errors = 0
@@ -102,13 +96,17 @@ export default function BulkUpload({ user }) {
     alert(`Restored ${success} records, ${errors} failed`)
     setBackupData(null)
     setUploading(false)
-    // Force refresh of page to show restored data
     window.location.reload()
   }
 
   const handleFileUpload = async (event) => {
     const file = event.target.files[0]
-    if (!file) return
+    if (!file) {
+      alert("No file selected")
+      return
+    }
+    alert(`File selected: ${file.name}, size: ${file.size} bytes`)
+
     if (!file.name.endsWith('.csv')) {
       alert('Please upload a CSV file')
       return
@@ -119,29 +117,32 @@ export default function BulkUpload({ user }) {
     setResult(null)
     setBackupData(null)
 
-    // Wait for PapaParse to be available
+    // Wait for PapaParse
     let Papa
     try {
+      alert("Loading PapaParse...")
       Papa = await getPapa()
+      alert("PapaParse loaded successfully")
     } catch (err) {
-      alert('CSV parsing library failed to load. Please refresh and try again.')
+      alert('CSV parsing library failed to load: ' + err.message)
       console.error(err)
       setUploading(false)
       return
     }
 
+    alert("Starting Papa.parse...")
     Papa.parse(file, {
       header: true,
       skipEmptyLines: true,
       complete: async (results) => {
+        alert(`Parse complete. Rows found: ${results.data.length}`)
         const rows = results.data
         const totalRows = rows.length
         let errorList = []
         let skippedMissing = 0
         let dateErrors = 0
 
-        // First pass: collect all unique account IDs and build client objects
-        const clientMap = new Map() // account_id -> client object (with CSV data)
+        const clientMap = new Map()
         const allAccountIds = []
 
         for (let i = 0; i < totalRows; i++) {
@@ -155,7 +156,6 @@ export default function BulkUpload({ user }) {
             continue
           }
 
-          // Parse installation date
           const rawInstallDate = row['Installation Date'] || row.installation_date
           const formattedInstallDate = parseDate(rawInstallDate)
           if (rawInstallDate && !formattedInstallDate) {
@@ -163,7 +163,6 @@ export default function BulkUpload({ user }) {
             errorList.push(`Row ${i+1}: Invalid installation date "${rawInstallDate}"`)
           }
 
-          // Parse expiry date (new)
           const rawExpiryDate = row['Expiry Date'] || row.expiry_date
           const formattedExpiryDate = parseDate(rawExpiryDate)
           if (rawExpiryDate && !formattedExpiryDate) {
@@ -171,7 +170,6 @@ export default function BulkUpload({ user }) {
             errorList.push(`Row ${i+1}: Invalid expiry date "${rawExpiryDate}"`)
           }
 
-          // Parse AAV value (USD) – optional number
           let aavValue = null
           const rawAav = row['AAV (USD)'] || row.aav_value_usd
           if (rawAav !== undefined && rawAav !== '') {
@@ -179,7 +177,6 @@ export default function BulkUpload({ user }) {
             if (!isNaN(parsed)) aavValue = parsed
           }
 
-          // Account status: normalise to 'active' or 'disabled'
           let accountStatus = 'active'
           const rawStatus = row['Account Status'] || row.account_status
           if (rawStatus) {
@@ -188,7 +185,6 @@ export default function BulkUpload({ user }) {
             else if (statusLower === 'active') accountStatus = 'active'
           }
 
-          // Disabled reason (maps to database column 'disabled_for')
           const disabledFor = row['Disabled Reason'] || row.disabled_for || row.disabled_reason
 
           const client = {
@@ -211,24 +207,23 @@ export default function BulkUpload({ user }) {
           allAccountIds.push(accountId)
         }
 
+        alert(`Processed ${clientMap.size} valid rows.`)
+
         if (clientMap.size === 0) {
           setResult({ inserted: 0, updated: 0, errors: errorList.length, errorDetails: errorList, skippedMissing, dateErrors })
           setUploading(false)
           return
         }
 
-        // If updateMode is true, fetch existing records to know which are new vs update,
-        // and create a backup of existing records that will be updated.
         let existingIds = []
         let backup = null
         if (updateMode) {
+          alert("Fetching existing records from database...")
           const existingRecords = await fetchExistingRecords(allAccountIds)
           existingIds = existingRecords.map(r => r.account_id)
-          // Create mapping of existing records (account_id -> { created_at, created_by })
           const existingMeta = new Map()
           existingRecords.forEach(rec => existingMeta.set(rec.account_id, { created_at: rec.created_at, created_by: rec.created_by }))
 
-          // For existing records, preserve created_at/created_by; for new ones, set them now.
           for (const [accId, client] of clientMap.entries()) {
             if (existingMeta.has(accId)) {
               const meta = existingMeta.get(accId)
@@ -240,13 +235,12 @@ export default function BulkUpload({ user }) {
             }
           }
 
-          // Create full backup of existing records that will be updated
           if (existingIds.length > 0) {
+            alert("Creating backup of existing records...")
             backup = await createBackup(existingIds)
             if (backup) setBackupData(backup)
           }
         } else {
-          // Update mode OFF: only insert new records (ignore existing ones)
           const existingRecords = await fetchExistingRecords(allAccountIds)
           const existingIdSet = new Set(existingRecords.map(r => r.account_id))
           for (const accId of clientMap.keys()) {
@@ -261,7 +255,6 @@ export default function BulkUpload({ user }) {
           }
         }
 
-        // Prepare final list of clients to upsert
         const clientsToUpsert = Array.from(clientMap.values())
         if (clientsToUpsert.length === 0) {
           setResult({ inserted: 0, updated: 0, errors: errorList.length, errorDetails: errorList, skippedMissing, dateErrors })
@@ -269,7 +262,7 @@ export default function BulkUpload({ user }) {
           return
         }
 
-        // Perform batch upsert (or insert-only if updateMode false)
+        alert(`Upserting ${clientsToUpsert.length} records in batches...`)
         const batchSize = 50
         let totalInserted = 0
         let totalUpdated = 0
@@ -282,7 +275,6 @@ export default function BulkUpload({ user }) {
             errorList.push(`Batch error: ${error.message}`)
           } else {
             if (updateMode) {
-              // With updateMode, count updates vs inserts
               for (const client of batch) {
                 if (existingIds.includes(client.account_id)) totalUpdated++
                 else totalInserted++
@@ -304,10 +296,11 @@ export default function BulkUpload({ user }) {
           totalProcessed: clientsToUpsert.length
         })
         setUploading(false)
+        alert("Upload complete!")
       },
       error: (err) => {
+        alert("Papa.parse error: " + err.message)
         console.error('Parse error:', err)
-        alert('Parse error: ' + err.message)
         setUploading(false)
       }
     })
@@ -315,7 +308,7 @@ export default function BulkUpload({ user }) {
 
   return (
     <div className="card" style={{ maxWidth: '800px', margin: '0 auto' }}>
-      <h3>Bulk Upload Clients (CSV)</h3>
+      <h3>Bulk Upload Clients (CSV) – DEBUG VERSION</h3>
       <p>Upload a CSV file with these exact column headers:</p>
       <pre style={{ fontSize: '0.7rem', background: 'var(--bg)', padding: '0.5rem' }}>
         Account ID,Name,Phone/Contact,Address,Service Tag/Package Type,Price,Retention Agent,Installation Date,Account Status,AAV (USD),Expiry Date,Disabled Reason
@@ -325,7 +318,6 @@ export default function BulkUpload({ user }) {
       <p><strong>AAV (USD):</strong> A number like 500.00 (optional).</p>
       <p><strong>Disabled Reason:</strong> Text explaining why the account was disabled (optional).</p>
 
-      {/* Toggle for update mode and Undo button */}
       <div style={{ margin: '1rem 0', display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <input
