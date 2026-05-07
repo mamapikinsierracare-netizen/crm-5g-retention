@@ -1,20 +1,53 @@
 import { useState } from 'react'
 import { supabase } from './supabase'
 
-// Helper: ensure PapaParse is loaded (CDN)
-let papaLoadPromise = null
-function getPapa() {
-  if (window.Papa) return Promise.resolve(window.Papa)
-  if (papaLoadPromise) return papaLoadPromise
-  papaLoadPromise = new Promise((resolve, reject) => {
-    const script = document.createElement('script')
-    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js'
-    script.onload = () => resolve(window.Papa)
-    script.onerror = () => reject(new Error('Failed to load PapaParse'))
-    document.head.appendChild(script)
-  })
-  return papaLoadPromise
+// ─── Native CSV parser (replaces PapaParse – no external dependency) ───────
+// Handles: quoted fields, commas inside quotes, \r\n and \n line endings.
+function parseCSV(text) {
+  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
+  if (lines.length < 2) return { data: [], errors: [] }
+
+  // Parse a single raw line respecting quoted fields
+  function parseLine(line) {
+    const fields = []
+    let current = ''
+    let inQuotes = false
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i]
+      if (ch === '"') {
+        if (inQuotes && line[i + 1] === '"') { current += '"'; i++ }
+        else inQuotes = !inQuotes
+      } else if (ch === ',' && !inQuotes) {
+        fields.push(current.trim())
+        current = ''
+      } else {
+        current += ch
+      }
+    }
+    fields.push(current.trim())
+    return fields
+  }
+
+  const headers = parseLine(lines[0])
+  const data = []
+  const errors = []
+
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i].trim()
+    if (!line) continue
+    const values = parseLine(line)
+    if (values.length !== headers.length) {
+      errors.push({ row: i + 1, message: `Column count mismatch (expected ${headers.length}, got ${values.length})` })
+      continue
+    }
+    const row = {}
+    headers.forEach((h, idx) => { row[h] = values[idx] })
+    data.push(row)
+  }
+
+  return { data, errors }
 }
+// ────────────────────────────────────────────────────────────────────────────
 
 // Robust date parser (supports DD/MM/YYYY, DD-MM-YYYY, YYYY-MM-DD)
 function parseDate(dateStr) {
@@ -22,8 +55,8 @@ function parseDate(dateStr) {
   let trimmed = dateStr.trim()
   if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
     const [year, month, day] = trimmed.split('-')
-    const d = new Date(year, month-1, day)
-    if (d.getFullYear() == year && d.getMonth() == month-1 && d.getDate() == day) return trimmed
+    const d = new Date(year, month - 1, day)
+    if (d.getFullYear() == year && d.getMonth() == month - 1 && d.getDate() == day) return trimmed
     return null
   }
   let parts
@@ -40,7 +73,7 @@ function parseDate(dateStr) {
   if (month < 1 || month > 12) return null
   const daysInMonth = new Date(year, month, 0).getDate()
   if (day < 1 || day > daysInMonth) return null
-  return `${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
 }
 
 export default function BulkUpload({ user }) {
@@ -112,203 +145,182 @@ export default function BulkUpload({ user }) {
     setResult(null)
     setBackupData(null)
 
-    let Papa
-    try {
-      Papa = await getPapa()
-    } catch (err) {
-      alert('CSV parsing library failed to load. Please refresh and try again.')
-      console.error(err)
-      setUploading(false)
-      return
-    }
-
     const reader = new FileReader()
     reader.onload = async (e) => {
       const csvText = e.target.result
-      Papa.parse(csvText, {
-        header: true,
-        skipEmptyLines: true,
-        complete: async (results) => {
-          const rows = results.data
-          const totalRows = rows.length
-          let errorList = []
-          let skippedMissing = 0
-          let dateErrors = 0
-          let numberErrors = 0
 
-          const clientMap = new Map()
-          const allAccountIds = []
+      // ── Parse using native parser ──────────────────────────────────────
+      const { data: rows, errors: parseErrors } = parseCSV(csvText)
+      // ──────────────────────────────────────────────────────────────────
 
-          for (let i = 0; i < totalRows; i++) {
-            const row = rows[i]
-            // Match exactly the header in your sample CSV
-            const accountId = row['Account ID'] || row.account_id
-            const name = row['Name'] || row.name
-            const contact = row['Phone/Contact'] || row.contact
-            if (!accountId || !name || !contact) {
-              skippedMissing++
-              errorList.push(`Row ${i+1}: Missing required field (Account ID, Name, or Contact)`)
-              continue
-            }
+      const totalRows = rows.length
+      let errorList = parseErrors.map(pe => `Row ${pe.row}: ${pe.message}`)
+      let skippedMissing = 0
+      let dateErrors = 0
+      let numberErrors = 0
 
-            const rawInstallDate = row['Installation Date'] || row.installation_date
-            const formattedInstallDate = parseDate(rawInstallDate)
-            if (rawInstallDate && !formattedInstallDate) {
-              dateErrors++
-              errorList.push(`Row ${i+1}: Invalid installation date "${rawInstallDate}"`)
-            }
+      const clientMap = new Map()
+      const allAccountIds = []
 
-            // expires_in from "Expires In" column (integer)
-            let expiresIn = null
-            const rawExpires = row['Expires In'] || row.expires_in
-            if (rawExpires !== undefined && rawExpires !== '') {
-              const parsed = parseInt(rawExpires, 10)
-              if (!isNaN(parsed)) expiresIn = parsed
-              else {
-                numberErrors++
-                errorList.push(`Row ${i+1}: Invalid Expires In value "${rawExpires}" (integer required)`)
-              }
-            }
+      for (let i = 0; i < totalRows; i++) {
+        const row = rows[i]
+        const accountId = row['Account ID'] || row.account_id
+        const name = row['Name'] || row.name
+        const contact = row['Phone/Contact'] || row.contact
+        if (!accountId || !name || !contact) {
+          skippedMissing++
+          errorList.push(`Row ${i + 1}: Missing required field (Account ID, Name, or Contact)`)
+          continue
+        }
 
-            // aav_value_usd from "AAV (USD)" column
-            let aavValue = null
-            const rawAav = row['AAV (USD)'] || row.aav_value_usd
-            if (rawAav !== undefined && rawAav !== '') {
-              const parsed = parseFloat(rawAav)
-              if (!isNaN(parsed)) aavValue = parsed
-            }
+        const rawInstallDate = row['Installation Date'] || row.installation_date
+        const formattedInstallDate = parseDate(rawInstallDate)
+        if (rawInstallDate && !formattedInstallDate) {
+          dateErrors++
+          errorList.push(`Row ${i + 1}: Invalid installation date "${rawInstallDate}"`)
+        }
 
-            let accountStatus = 'active'
-            const rawStatus = row['Account Status'] || row.account_status
-            if (rawStatus) {
-              const statusLower = rawStatus.trim().toLowerCase()
-              if (statusLower === 'disabled') accountStatus = 'disabled'
-              else if (statusLower === 'active') accountStatus = 'active'
-            }
-
-            // disabled_for from "Disabled For" column (integer)
-            let disabledFor = null
-            const rawDisabled = row['Disabled For'] || row.disabled_for
-            if (rawDisabled !== undefined && rawDisabled !== '') {
-              const parsed = parseInt(rawDisabled, 10)
-              if (!isNaN(parsed)) disabledFor = parsed
-              else {
-                numberErrors++
-                errorList.push(`Row ${i+1}: Invalid Disabled For value "${rawDisabled}" (integer required)`)
-              }
-            }
-
-            const client = {
-              account_id: accountId,
-              name: name,
-              contact: contact,
-              address: row['Address'] || row.address,
-              current_package: row['Service Tag/Package Type'] || row.current_package,
-              package_price: parseFloat(row['Price'] || row.package_price) || 0,
-              retention_agent: row['Retention Agent'] || row.retention_agent,
-              installation_date: formattedInstallDate,
-              expires_in: expiresIn,
-              aav_value_usd: aavValue,
-              account_status: accountStatus,
-              disabled_for: disabledFor,
-              updated_by: user.email,
-              updated_at: new Date().toISOString(),
-            }
-            clientMap.set(accountId, client)
-            allAccountIds.push(accountId)
+        let expiresIn = null
+        const rawExpires = row['Expires In'] || row.expires_in
+        if (rawExpires !== undefined && rawExpires !== '') {
+          const parsed = parseInt(rawExpires, 10)
+          if (!isNaN(parsed)) expiresIn = parsed
+          else {
+            numberErrors++
+            errorList.push(`Row ${i + 1}: Invalid Expires In value "${rawExpires}" (integer required)`)
           }
+        }
 
-          if (clientMap.size === 0) {
-            setResult({ inserted: 0, updated: 0, errors: errorList.length, errorDetails: errorList, skippedMissing, dateErrors, numberErrors })
-            setUploading(false)
-            return
+        let aavValue = null
+        const rawAav = row['AAV (USD)'] || row.aav_value_usd
+        if (rawAav !== undefined && rawAav !== '') {
+          const parsed = parseFloat(rawAav)
+          if (!isNaN(parsed)) aavValue = parsed
+        }
+
+        let accountStatus = 'active'
+        const rawStatus = row['Account Status'] || row.account_status
+        if (rawStatus) {
+          const statusLower = rawStatus.trim().toLowerCase()
+          if (statusLower === 'disabled') accountStatus = 'disabled'
+          else if (statusLower === 'active') accountStatus = 'active'
+        }
+
+        let disabledFor = null
+        const rawDisabled = row['Disabled For'] || row.disabled_for
+        if (rawDisabled !== undefined && rawDisabled !== '') {
+          const parsed = parseInt(rawDisabled, 10)
+          if (!isNaN(parsed)) disabledFor = parsed
+          else {
+            numberErrors++
+            errorList.push(`Row ${i + 1}: Invalid Disabled For value "${rawDisabled}" (integer required)`)
           }
+        }
 
-          let existingIds = []
+        const client = {
+          account_id: accountId,
+          name: name,
+          contact: contact,
+          address: row['Address'] || row.address,
+          current_package: row['Service Tag/Package Type'] || row.current_package,
+          package_price: parseFloat(row['Price'] || row.package_price) || 0,
+          retention_agent: row['Retention Agent'] || row.retention_agent,
+          installation_date: formattedInstallDate,
+          expires_in: expiresIn,
+          aav_value_usd: aavValue,
+          account_status: accountStatus,
+          disabled_for: disabledFor,
+          updated_by: user.email,
+          updated_at: new Date().toISOString(),
+        }
+        clientMap.set(accountId, client)
+        allAccountIds.push(accountId)
+      }
+
+      if (clientMap.size === 0) {
+        setResult({ inserted: 0, updated: 0, errors: errorList.length, errorDetails: errorList, skippedMissing, dateErrors, numberErrors })
+        setUploading(false)
+        return
+      }
+
+      let existingIds = []
+      if (updateMode) {
+        const existingRecords = await fetchExistingRecords(allAccountIds)
+        existingIds = existingRecords.map(r => r.account_id)
+        const existingMeta = new Map()
+        existingRecords.forEach(rec => existingMeta.set(rec.account_id, { created_at: rec.created_at, created_by: rec.created_by }))
+
+        for (const [accId, client] of clientMap.entries()) {
+          if (existingMeta.has(accId)) {
+            const meta = existingMeta.get(accId)
+            client.created_at = meta.created_at
+            client.created_by = meta.created_by
+          } else {
+            client.created_at = new Date().toISOString()
+            client.created_by = user.email
+          }
+        }
+
+        if (existingIds.length > 0) {
+          const backupResult = await createBackup(existingIds)
+          if (backupResult) setBackupData(backupResult)
+        }
+      } else {
+        const existingRecords = await fetchExistingRecords(allAccountIds)
+        const existingIdSet = new Set(existingRecords.map(r => r.account_id))
+        for (const accId of clientMap.keys()) {
+          if (existingIdSet.has(accId)) {
+            clientMap.delete(accId)
+            errorList.push(`Account ${accId} already exists – skipped (update mode disabled)`)
+          } else {
+            const client = clientMap.get(accId)
+            client.created_at = new Date().toISOString()
+            client.created_by = user.email
+          }
+        }
+      }
+
+      const clientsToUpsert = Array.from(clientMap.values())
+      if (clientsToUpsert.length === 0) {
+        setResult({ inserted: 0, updated: 0, errors: errorList.length, errorDetails: errorList, skippedMissing, dateErrors, numberErrors })
+        setUploading(false)
+        return
+      }
+
+      const batchSize = 50
+      let totalInserted = 0
+      let totalUpdated = 0
+      for (let i = 0; i < clientsToUpsert.length; i += batchSize) {
+        const batch = clientsToUpsert.slice(i, i + batchSize)
+        const { error } = await supabase
+          .from('clients')
+          .upsert(batch, { onConflict: 'account_id', ignoreDuplicates: false })
+        if (error) {
+          errorList.push(`Batch error: ${error.message}`)
+        } else {
           if (updateMode) {
-            const existingRecords = await fetchExistingRecords(allAccountIds)
-            existingIds = existingRecords.map(r => r.account_id)
-            const existingMeta = new Map()
-            existingRecords.forEach(rec => existingMeta.set(rec.account_id, { created_at: rec.created_at, created_by: rec.created_by }))
-
-            for (const [accId, client] of clientMap.entries()) {
-              if (existingMeta.has(accId)) {
-                const meta = existingMeta.get(accId)
-                client.created_at = meta.created_at
-                client.created_by = meta.created_by
-              } else {
-                client.created_at = new Date().toISOString()
-                client.created_by = user.email
-              }
-            }
-
-            if (existingIds.length > 0) {
-              const backupResult = await createBackup(existingIds)
-              if (backupResult) setBackupData(backupResult)
+            for (const client of batch) {
+              if (existingIds.includes(client.account_id)) totalUpdated++
+              else totalInserted++
             }
           } else {
-            const existingRecords = await fetchExistingRecords(allAccountIds)
-            const existingIdSet = new Set(existingRecords.map(r => r.account_id))
-            for (const accId of clientMap.keys()) {
-              if (existingIdSet.has(accId)) {
-                clientMap.delete(accId)
-                errorList.push(`Account ${accId} already exists – skipped (update mode disabled)`)
-              } else {
-                const client = clientMap.get(accId)
-                client.created_at = new Date().toISOString()
-                client.created_by = user.email
-              }
-            }
+            totalInserted += batch.length
           }
-
-          const clientsToUpsert = Array.from(clientMap.values())
-          if (clientsToUpsert.length === 0) {
-            setResult({ inserted: 0, updated: 0, errors: errorList.length, errorDetails: errorList, skippedMissing, dateErrors, numberErrors })
-            setUploading(false)
-            return
-          }
-
-          const batchSize = 50
-          let totalInserted = 0
-          let totalUpdated = 0
-          for (let i = 0; i < clientsToUpsert.length; i += batchSize) {
-            const batch = clientsToUpsert.slice(i, i + batchSize)
-            const { error } = await supabase
-              .from('clients')
-              .upsert(batch, { onConflict: 'account_id', ignoreDuplicates: false })
-            if (error) {
-              errorList.push(`Batch error: ${error.message}`)
-            } else {
-              if (updateMode) {
-                for (const client of batch) {
-                  if (existingIds.includes(client.account_id)) totalUpdated++
-                  else totalInserted++
-                }
-              } else {
-                totalInserted += batch.length
-              }
-            }
-            setProgress(Math.round(((i + batchSize) / clientsToUpsert.length) * 100))
-          }
-
-          setResult({
-            inserted: totalInserted,
-            updated: totalUpdated,
-            errors: errorList.length,
-            errorDetails: errorList,
-            skippedMissing,
-            dateErrors,
-            numberErrors,
-            totalProcessed: clientsToUpsert.length
-          })
-          setUploading(false)
-        },
-        error: (err) => {
-          console.error('Parse error:', err)
-          alert('Parse error: ' + err.message)
-          setUploading(false)
         }
+        setProgress(Math.round(((i + batchSize) / clientsToUpsert.length) * 100))
+      }
+
+      setResult({
+        inserted: totalInserted,
+        updated: totalUpdated,
+        errors: errorList.length,
+        errorDetails: errorList,
+        skippedMissing,
+        dateErrors,
+        numberErrors,
+        totalProcessed: clientsToUpsert.length
       })
+      setUploading(false)
     }
     reader.onerror = () => {
       alert('Failed to read file')
@@ -342,7 +354,7 @@ export default function BulkUpload({ user }) {
         </label>
         {backupData && backupData.length > 0 && (
           <button onClick={handleUndo} className="btn-outline" style={{ backgroundColor: 'var(--warning)', color: '#000', border: 'none' }}>
-            🔄 Undo Last Bulk Update
+            Undo Last Bulk Update
           </button>
         )}
       </div>
