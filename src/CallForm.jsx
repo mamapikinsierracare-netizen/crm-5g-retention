@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { supabase } from '../supabase'; // relative path from src/components to src
+import { supabase } from "./supabase";// relative path from src/components to src
 
 export default function CallForm({ client, customer, user, onCallSubmitted, onSuccess }) {
   // Allow either 'client' or 'customer' prop
