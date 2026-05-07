@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { supabase } from './supabase'
 
+// Helper: ensure PapaParse is loaded (CDN)
 let papaLoadPromise = null
 function getPapa() {
   if (window.Papa) return Promise.resolve(window.Papa)
@@ -15,6 +16,7 @@ function getPapa() {
   return papaLoadPromise
 }
 
+// Robust date parser (unchanged)
 function parseDate(dateStr) {
   if (!dateStr || dateStr === '0000-00-00') return null
   let trimmed = dateStr.trim()
@@ -100,7 +102,6 @@ export default function BulkUpload({ user }) {
   const handleFileUpload = async (event) => {
     const file = event.target.files[0]
     if (!file) return
-    alert(`Step 1: File selected: ${file.name}, size: ${file.size}`)
     if (!file.name.endsWith('.csv')) {
       alert('Please upload a CSV file')
       return
@@ -113,71 +114,205 @@ export default function BulkUpload({ user }) {
 
     let Papa
     try {
-      alert("Step 2: Loading PapaParse...")
       Papa = await getPapa()
-      alert("Step 3: PapaParse loaded")
     } catch (err) {
-      alert('Step 3 failed: ' + err.message)
+      alert('CSV parsing library failed to load. Please refresh and try again.')
+      console.error(err)
       setUploading(false)
       return
     }
 
-    alert("Step 4: Starting FileReader...")
     const reader = new FileReader()
     reader.onload = async (e) => {
-      alert("Step 5: FileReader done, CSV text length: " + e.target.result.length)
       const csvText = e.target.result
-      alert("Step 6: Calling Papa.parse on text...")
       Papa.parse(csvText, {
         header: true,
         skipEmptyLines: true,
         complete: async (results) => {
-          alert(`Step 7: Parse complete. Rows: ${results.data.length}`)
           const rows = results.data
-          // ... rest of processing (same as before)
-          // We'll just do minimal processing to see if it reaches here
-          alert("Step 8: Processing rows...")
+          const totalRows = rows.length
           let errorList = []
           let skippedMissing = 0
           let dateErrors = 0
+          let numberErrors = 0
+
           const clientMap = new Map()
           const allAccountIds = []
-          for (let i = 0; i < rows.length; i++) {
+
+          for (let i = 0; i < totalRows; i++) {
             const row = rows[i]
+            // Use exact column names from your sample CSV
             const accountId = row['Account ID'] || row.account_id
             const name = row['Name'] || row.name
             const contact = row['Phone/Contact'] || row.contact
             if (!accountId || !name || !contact) {
               skippedMissing++
-              errorList.push(`Row ${i+1}: Missing required field`)
+              errorList.push(`Row ${i+1}: Missing required field (Account ID, Name, or Contact)`)
               continue
             }
-            // Simplified client object for debug
-            clientMap.set(accountId, { account_id: accountId, name, contact })
+
+            const rawInstallDate = row['Installation Date'] || row.installation_date
+            const formattedInstallDate = parseDate(rawInstallDate)
+            if (rawInstallDate && !formattedInstallDate) {
+              dateErrors++
+              errorList.push(`Row ${i+1}: Invalid installation date "${rawInstallDate}"`)
+            }
+
+            // Map "Expires In" to expires_in (integer)
+            let expiresIn = null
+            const rawExpires = row['Expires In'] || row.expires_in
+            if (rawExpires !== undefined && rawExpires !== '') {
+              const parsed = parseInt(rawExpires, 10)
+              if (!isNaN(parsed)) expiresIn = parsed
+              else {
+                numberErrors++
+                errorList.push(`Row ${i+1}: Invalid Expires In value "${rawExpires}" (must be integer)`)
+              }
+            }
+
+            // Map "AAV (USD)" to aav_value_usd
+            let aavValue = null
+            const rawAav = row['AAV (USD)'] || row.aav_value_usd
+            if (rawAav !== undefined && rawAav !== '') {
+              const parsed = parseFloat(rawAav)
+              if (!isNaN(parsed)) aavValue = parsed
+            }
+
+            let accountStatus = 'active'
+            const rawStatus = row['Account Status'] || row.account_status
+            if (rawStatus) {
+              const statusLower = rawStatus.trim().toLowerCase()
+              if (statusLower === 'disabled') accountStatus = 'disabled'
+              else if (statusLower === 'active') accountStatus = 'active'
+            }
+
+            // Map "Disabled For" to disabled_for (integer)
+            let disabledFor = null
+            const rawDisabled = row['Disabled For'] || row.disabled_for
+            if (rawDisabled !== undefined && rawDisabled !== '') {
+              const parsed = parseInt(rawDisabled, 10)
+              if (!isNaN(parsed)) disabledFor = parsed
+              else {
+                numberErrors++
+                errorList.push(`Row ${i+1}: Invalid Disabled For value "${rawDisabled}" (must be integer)`)
+              }
+            }
+
+            const client = {
+              account_id: accountId,
+              name: name,
+              contact: contact,
+              address: row['Address'] || row.address,
+              current_package: row['Service Tag/Package Type'] || row.current_package,
+              package_price: parseFloat(row['Price'] || row.package_price) || 0,
+              retention_agent: row['Retention Agent'] || row.retention_agent,
+              installation_date: formattedInstallDate,
+              expires_in: expiresIn,
+              aav_value_usd: aavValue,
+              account_status: accountStatus,
+              disabled_for: disabledFor,
+              updated_by: user.email,
+              updated_at: new Date().toISOString(),
+            }
+            clientMap.set(accountId, client)
             allAccountIds.push(accountId)
           }
-          alert(`Step 9: Valid clients: ${clientMap.size}, skipped: ${skippedMissing}`)
-          // Now try database operations
-          alert("Step 10: Fetching existing records...")
+
+          if (clientMap.size === 0) {
+            setResult({ inserted: 0, updated: 0, errors: errorList.length, errorDetails: errorList, skippedMissing, dateErrors, numberErrors })
+            setUploading(false)
+            return
+          }
+
           let existingIds = []
+          let backup = null
           if (updateMode) {
             const existingRecords = await fetchExistingRecords(allAccountIds)
             existingIds = existingRecords.map(r => r.account_id)
-            alert(`Step 11: Found ${existingIds.length} existing records`)
+            const existingMeta = new Map()
+            existingRecords.forEach(rec => existingMeta.set(rec.account_id, { created_at: rec.created_at, created_by: rec.created_by }))
+
+            for (const [accId, client] of clientMap.entries()) {
+              if (existingMeta.has(accId)) {
+                const meta = existingMeta.get(accId)
+                client.created_at = meta.created_at
+                client.created_by = meta.created_by
+              } else {
+                client.created_at = new Date().toISOString()
+                client.created_by = user.email
+              }
+            }
+
+            if (existingIds.length > 0) {
+              backup = await createBackup(existingIds)
+              if (backup) setBackupData(backup)
+            }
+          } else {
+            const existingRecords = await fetchExistingRecords(allAccountIds)
+            const existingIdSet = new Set(existingRecords.map(r => r.account_id))
+            for (const accId of clientMap.keys()) {
+              if (existingIdSet.has(accId)) {
+                clientMap.delete(accId)
+                errorList.push(`Account ${accId} already exists – skipped (update mode disabled)`)
+              } else {
+                const client = clientMap.get(accId)
+                client.created_at = new Date().toISOString()
+                client.created_by = user.email
+              }
+            }
           }
-          alert("Step 12: All done, setting result.")
-          setResult({ inserted: clientMap.size, updated: 0, errors: errorList.length, errorDetails: errorList, skippedMissing, dateErrors })
+
+          const clientsToUpsert = Array.from(clientMap.values())
+          if (clientsToUpsert.length === 0) {
+            setResult({ inserted: 0, updated: 0, errors: errorList.length, errorDetails: errorList, skippedMissing, dateErrors, numberErrors })
+            setUploading(false)
+            return
+          }
+
+          const batchSize = 50
+          let totalInserted = 0
+          let totalUpdated = 0
+          for (let i = 0; i < clientsToUpsert.length; i += batchSize) {
+            const batch = clientsToUpsert.slice(i, i + batchSize)
+            const { error } = await supabase
+              .from('clients')
+              .upsert(batch, { onConflict: 'account_id', ignoreDuplicates: false })
+            if (error) {
+              errorList.push(`Batch error: ${error.message}`)
+            } else {
+              if (updateMode) {
+                for (const client of batch) {
+                  if (existingIds.includes(client.account_id)) totalUpdated++
+                  else totalInserted++
+                }
+              } else {
+                totalInserted += batch.length
+              }
+            }
+            setProgress(Math.round(((i + batchSize) / clientsToUpsert.length) * 100))
+          }
+
+          setResult({
+            inserted: totalInserted,
+            updated: totalUpdated,
+            errors: errorList.length,
+            errorDetails: errorList,
+            skippedMissing,
+            dateErrors,
+            numberErrors,
+            totalProcessed: clientsToUpsert.length
+          })
           setUploading(false)
-          alert("Upload complete!")
         },
         error: (err) => {
-          alert("Papa.parse error: " + err.message)
+          console.error('Parse error:', err)
+          alert('Parse error: ' + err.message)
           setUploading(false)
         }
       })
     }
     reader.onerror = () => {
-      alert("FileReader error")
+      alert('Failed to read file')
       setUploading(false)
     }
     reader.readAsText(file, 'UTF-8')
@@ -185,14 +320,52 @@ export default function BulkUpload({ user }) {
 
   return (
     <div className="card" style={{ maxWidth: '800px', margin: '0 auto' }}>
-      <h3>Bulk Upload Clients (CSV) – DEBUG VERSION</h3>
-      <p>Upload a CSV file...</p>
+      <h3>Bulk Upload Clients (CSV)</h3>
+      <p>Upload a CSV file with these exact column headers:</p>
+      <pre style={{ fontSize: '0.7rem', background: 'var(--bg)', padding: '0.5rem' }}>
+        Account ID,Name,Phone/Contact,Address,Service Tag/Package Type,Price,Retention Agent,Installation Date,Account Status,AAV (USD),Expires In,Disabled For
+      </pre>
+      <p><strong>Date format:</strong> DD/MM/YYYY, DD-MM-YYYY, or YYYY-MM-DD for Installation Date.</p>
+      <p><strong>Expires In:</strong> integer (number of days) – maps to <code>expires_in</code> column.</p>
+      <p><strong>Disabled For:</strong> integer code – maps to <code>disabled_for</code> column.</p>
+      <p><strong>Account Status:</strong> "active" or "disabled". Defaults to "active".</p>
+      <p><strong>AAV (USD):</strong> decimal number.</p>
+
+      <div style={{ margin: '1rem 0', display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <input
+            type="checkbox"
+            checked={updateMode}
+            onChange={(e) => setUpdateMode(e.target.checked)}
+            disabled={uploading}
+          />
+          <strong>Update existing accounts (by Account ID)</strong>
+        </label>
+        {backupData && backupData.length > 0 && (
+          <button onClick={handleUndo} className="btn-outline" style={{ backgroundColor: 'var(--warning)', color: '#000', border: 'none' }}>
+            🔄 Undo Last Bulk Update
+          </button>
+        )}
+      </div>
+
       <input type="file" accept=".csv" onChange={handleFileUpload} disabled={uploading} />
       {uploading && <p>Uploading... {progress}% completed</p>}
+
       {result && (
-        <div>
-          <p>Inserted: {result.inserted}</p>
-          <p>Errors: {result.errors}</p>
+        <div style={{ marginTop: '1rem' }}>
+          <p><strong>Successfully inserted:</strong> {result.inserted}</p>
+          <p><strong>Successfully updated:</strong> {result.updated}</p>
+          <p><strong>Rows skipped (missing required fields):</strong> {result.skippedMissing}</p>
+          <p><strong>Rows with invalid dates:</strong> {result.dateErrors}</p>
+          <p><strong>Rows with invalid number values (expires_in / disabled_for):</strong> {result.numberErrors || 0}</p>
+          <p><strong>Other errors:</strong> {result.errors}</p>
+          {result.errorDetails.length > 0 && (
+            <details>
+              <summary>Show error details</summary>
+              <pre style={{ fontSize: '0.7rem', maxHeight: '200px', overflow: 'auto' }}>{result.errorDetails.join('\n')}</pre>
+            </details>
+          )}
+          <button onClick={() => window.location.reload()}>Refresh Page to See New Customers</button>
         </div>
       )}
     </div>
