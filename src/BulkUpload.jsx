@@ -4,7 +4,7 @@ import { supabase } from './supabase'
 // Robust date parser (supports DD/MM/YYYY, DD-MM-YYYY, YYYY-MM-DD)
 function parseDate(dateStr) {
   if (!dateStr || dateStr === '0000-00-00') return null
-  let trimmed = dateStr.trim()
+  let trimmed = String(dateStr).trim()
   if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
     const [year, month, day] = trimmed.split('-')
     const d = new Date(year, month - 1, day)
@@ -33,7 +33,6 @@ export default function BulkUpload({ user }) {
   const [progress, setProgress] = useState(0)
   const [result, setResult] = useState(null)
   const [updateMode, setUpdateMode] = useState(true)
-  const [backupData, setBackupData] = useState(null)
 
   const fetchExistingRecords = async (accountIds) => {
     if (!accountIds.length) return []
@@ -45,36 +44,13 @@ export default function BulkUpload({ user }) {
     return data
   }
 
-  const createBackup = async (accountIds) => {
-    if (!updateMode || accountIds.length === 0) return null
-    const { data, error } = await supabase
-      .from('clients')
-      .select('*')
-      .in('account_id', accountIds)
-    if (error) return null
-    return data
-  }
-
-  const handleUndo = async () => {
-    if (!backupData || backupData.length === 0) return
-    if (!confirm(`Restore ${backupData.length} records?`)) return
-    setUploading(true)
-    for (const client of backupData) {
-      await supabase.from('clients').update(client).eq('account_id', client.account_id)
-    }
-    alert('Restored successfully')
-    setBackupData(null)
-    setUploading(false)
-    window.location.reload()
-  }
-
   const handleFileUpload = (event) => {
     const file = event.target.files[0]
     if (!file) return
 
-    // 1. Verify PapaParse is loaded from CDN
+    // 1. Safety Check: Verify PapaParse library exists from CDN
     if (!window.Papa) {
-      alert("Error: CSV library (PapaParse) not loaded. Please ensure you added the script to index.html and have an internet connection.")
+      alert("CSV library not ready. Please ensure you added the script to index.html and have an internet connection.")
       return
     }
 
@@ -82,190 +58,170 @@ export default function BulkUpload({ user }) {
     setProgress(0)
     setResult(null)
 
-    // 2. Use PapaParse directly on the file
+    // 2. Start Parsing
     window.Papa.parse(file, {
       header: true,
       skipEmptyLines: true,
+      transformHeader: (h) => h.trim(), // Fixes Excel hidden space issue
       complete: async (results) => {
         const rows = results.data
-        const totalRows = rows.length
-        let errorList = []
-        let skippedMissing = 0
-        let dateErrors = 0
-        let numberErrors = 0
-
-        if (totalRows === 0) {
-          alert("The file is empty")
+        if (!rows || rows.length === 0) {
+          alert("File is empty or incorrectly formatted.")
           setUploading(false)
           return
         }
 
+        const totalRows = rows.length
+        let skippedMissing = 0
         const clientMap = new Map()
         const allAccountIds = []
 
-        // 3. Process each row and map columns
+        // 3. Process Data Rows
         for (let i = 0; i < totalRows; i++) {
           const row = rows[i]
-          const accountId = row['Account ID'] || row.account_id
-          const name = row['Name'] || row.name
-          const contact = row['Phone/Contact'] || row.contact
+          
+          // Match headers flexibly
+          const accountId = String(row['Account ID'] || row.account_id || '').trim()
+          const name = (row['Name'] || row.name || '').trim()
+          const contact = String(row['Phone/Contact'] || row.contact || '').trim()
 
           if (!accountId || !name || !contact) {
             skippedMissing++
-            errorList.push(`Row ${i + 2}: Missing Account ID, Name, or Contact`)
             continue
           }
 
-          // Format Dates
           const rawInstallDate = row['Installation Date'] || row.installation_date
           const formattedInstallDate = parseDate(rawInstallDate)
-          if (rawInstallDate && !formattedInstallDate) dateErrors++
 
-          // Handle "Expires In" (number)
-          let expiresIn = null
-          const rawExpires = row['Expires In'] || row.expires_in
-          if (rawExpires) {
-            const p = parseInt(rawExpires, 10)
-            if (!isNaN(p)) expiresIn = p
-            else numberErrors++
-          }
+          const price = parseFloat(row['Price'] || row.package_price) || 0
+          const aav = parseFloat(row['AAV (USD)'] || row.aav_value_usd) || 0
+          const expires = parseInt(row['Expires In'] || row.expires_in, 10) || 0
+          const disabledForValue = parseInt(row['Disabled For'] || row.disabled_for, 10) || 0
 
-          // Handle AAV (decimal)
-          let aavValue = null
-          const rawAav = row['AAV (USD)'] || row.aav_value_usd
-          if (rawAav) {
-            const p = parseFloat(rawAav)
-            if (!isNaN(p)) aavValue = p
-          }
-
-          // Handle Status
           let accountStatus = 'active'
-          const rawStatus = row['Account Status'] || row.account_status
-          if (rawStatus && rawStatus.toLowerCase().trim() === 'disabled') {
-            accountStatus = 'disabled'
-          }
+          const rawStatus = (row['Account Status'] || row.account_status || '').toLowerCase()
+          if (rawStatus.includes('disable')) accountStatus = 'disabled'
 
-          // Handle Disabled For (integer)
-          let disabledFor = null
-          const rawDisabled = row['Disabled For'] || row.disabled_for
-          if (rawDisabled) {
-            const p = parseInt(rawDisabled, 10)
-            if (!isNaN(p)) disabledFor = p
-            else numberErrors++
-          }
-
-          const client = {
+          clientMap.set(accountId, {
             account_id: accountId,
             name: name,
             contact: contact,
-            address: row['Address'] || row.address,
-            current_package: row['Service Tag/Package Type'] || row.current_package,
-            package_price: parseFloat(row['Price'] || row.package_price) || 0,
-            retention_agent: row['Retention Agent'] || row.retention_agent,
+            address: row['Address'] || row.address || '',
+            current_package: row['Service Tag/Package Type'] || row.current_package || '',
+            package_price: price,
+            retention_agent: row['Retention Agent'] || row.retention_agent || '',
             installation_date: formattedInstallDate,
-            expires_in: expiresIn,
-            aav_value_usd: aavValue,
+            expires_in: expires,
+            aav_value_usd: aav,
             account_status: accountStatus,
-            disabled_for: disabledFor,
+            disabled_for: disabledForValue,
             updated_by: user.email,
             updated_at: new Date().toISOString(),
-          }
-          clientMap.set(accountId, client)
+          })
           allAccountIds.push(accountId)
         }
 
-        // 4. Handle Backup & Existing Records
+        // 4. Handle Database Logic
         const existingRecords = await fetchExistingRecords(allAccountIds)
-        const existingIds = existingRecords.map(r => r.account_id)
         const existingMeta = new Map(existingRecords.map(r => [r.account_id, r]))
+        const existingIds = existingRecords.map(r => r.account_id)
 
-        if (updateMode && existingIds.length > 0) {
-          const backup = await createBackup(existingIds)
-          if (backup) setBackupData(backup)
-        }
-
-        const clientsToUpsert = []
+        const finalData = []
         for (const [accId, client] of clientMap.entries()) {
           if (existingMeta.has(accId)) {
-            const meta = existingMeta.get(accId)
-            client.created_at = meta.created_at
-            client.created_by = meta.created_by
-            if (updateMode) clientsToUpsert.push(client)
-            else errorList.push(`Account ${accId} exists - skipped`)
+            if (updateMode) {
+              const meta = existingMeta.get(accId)
+              client.created_at = meta.created_at
+              client.created_by = meta.created_by
+              finalData.push(client)
+            }
           } else {
             client.created_at = new Date().toISOString()
             client.created_by = user.email
-            clientsToUpsert.push(client)
+            finalData.push(client)
           }
         }
 
-        // 5. Batch Upload to Supabase
-        const batchSize = 50
-        let totalInserted = 0
-        let totalUpdated = 0
-
-        for (let i = 0; i < clientsToUpsert.length; i += batchSize) {
-          const batch = clientsToUpsert.slice(i, i + batchSize)
-          const { error } = await supabase.from('clients').upsert(batch)
-          
-          if (error) {
-            errorList.push(`Upload error: ${error.message}`)
-          } else {
-            batch.forEach(c => {
-              if (existingIds.includes(c.account_id)) totalUpdated++
-              else totalInserted++
-            })
-          }
-          setProgress(Math.round(((i + batchSize) / clientsToUpsert.length) * 100))
+        if (finalData.length === 0) {
+          alert("No new or updated data found in file.")
+          setUploading(false)
+          return
         }
 
-        setResult({
-          inserted: totalInserted,
-          updated: totalUpdated,
-          errors: errorList.length,
-          errorDetails: errorList,
-          skippedMissing,
-          dateErrors,
-          numberErrors,
-          totalProcessed: clientsToUpsert.length
-        })
-        setUploading(false)
+        // 5. Send to Supabase
+        setProgress(50)
+        const { error } = await supabase.from('clients').upsert(finalData)
+        
+        if (error) {
+          alert("Database Error: " + error.message)
+          setUploading(false)
+        } else {
+          setProgress(100)
+          setResult({
+            inserted: finalData.length - (updateMode ? existingIds.filter(id => clientMap.has(id)).length : 0),
+            updated: updateMode ? existingIds.filter(id => clientMap.has(id)).length : 0,
+            skippedMissing,
+            total: totalRows
+          })
+          setUploading(false)
+        }
       }
     })
   }
 
   return (
-    <div className="card" style={{ maxWidth: '800px', margin: '0 auto' }}>
-      <h3>Bulk Upload Clients (CSV)</h3>
-      <p>Required Headers: <strong>Account ID, Name, Phone/Contact, Address, Service Tag/Package Type, Price, Retention Agent, Installation Date, Account Status, AAV (USD), Expires In, Disabled For</strong></p>
+    <div className="card" style={{ maxWidth: '800px', margin: '2rem auto', padding: '20px' }}>
+      <h2 style={{ marginBottom: '10px' }}>Bulk Upload Clients</h2>
+      <p style={{ fontSize: '0.8rem', color: '#666' }}>
+        <strong>Required CSV Headers:</strong> Account ID, Name, Phone/Contact, Address, Service Tag/Package Type, Price, Retention Agent, Installation Date, Account Status, AAV (USD), Expires In, Disabled For
+      </p>
 
-      <div style={{ margin: '1rem 0', display: 'flex', gap: '1rem' }}>
-        <label>
-          <input type="checkbox" checked={updateMode} onChange={(e) => setUpdateMode(e.target.checked)} disabled={uploading} />
-          <strong> Update existing accounts</strong>
-        </label>
-        {backupData && (
-          <button onClick={handleUndo} className="btn-outline" style={{ backgroundColor: 'orange' }}>Undo Last Update</button>
+      <div style={{ margin: '20px 0', display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <input 
+          type="checkbox" 
+          id="updateModeCheck"
+          checked={updateMode} 
+          onChange={(e) => setUpdateMode(e.target.checked)} 
+          disabled={uploading} 
+        />
+        <label htmlFor="updateModeCheck"><strong>Update existing accounts if ID matches</strong></label>
+      </div>
+
+      <div style={{ border: '2px dashed #ccc', padding: '30px', textAlign: 'center', borderRadius: '8px' }}>
+        <input 
+          type="file" 
+          accept=".csv" 
+          onChange={handleFileUpload} 
+          disabled={uploading} 
+        />
+        
+        {uploading && (
+          <div style={{ marginTop: '20px' }}>
+            <div style={{ background: '#eee', borderRadius: '10px', height: '10px', width: '100%', marginBottom: '10px' }}>
+              <div style={{ background: '#007bff', height: '10px', borderRadius: '10px', width: `${progress}%`, transition: 'width 0.3s' }}></div>
+            </div>
+            <p>Processing... {progress}%</p>
+          </div>
         )}
       </div>
 
-      <input type="file" accept=".csv" onChange={handleFileUpload} disabled={uploading} />
-      {uploading && <p>Processing... {progress}%</p>}
-
       {result && (
-        <div style={{ marginTop: '1rem', borderTop: '1px solid #ccc', paddingTop: '1rem' }}>
-          <p>✅ <strong>New:</strong> {result.inserted} | 🔄 <strong>Updated:</strong> {result.updated}</p>
-          <p>⚠️ <strong>Missing Fields:</strong> {result.skippedMissing} | 📅 <strong>Date Errors:</strong> {result.dateErrors}</p>
-          {result.errorDetails.length > 0 && (
-            <details>
-              <summary>View {result.errors} Errors</summary>
-              <pre style={{ fontSize: '0.7rem', color: 'red' }}>{result.errorDetails.join('\n')}</pre>
-            </details>
-          )}
-          <button onClick={() => window.location.reload()} style={{ marginTop: '1rem' }}>Refresh to view changes</button>
+        <div style={{ marginTop: '20px', padding: '15px', background: '#f8f9fa', borderRadius: '8px', borderLeft: '4px solid #28a745' }}>
+          <h4 style={{ color: '#28a745', marginTop: 0 }}>Upload Complete!</h4>
+          <ul style={{ listStyle: 'none', padding: 0, fontSize: '0.9rem' }}>
+            <li>✨ <strong>New Clients:</strong> {result.inserted}</li>
+            <li>🔄 <strong>Updated Clients:</strong> {result.updated}</li>
+            <li>⚠️ <strong>Rows Skipped:</strong> {result.skippedMissing}</li>
+            <li>📊 <strong>Total Processed:</strong> {result.total}</li>
+          </ul>
+          <button 
+            onClick={() => window.location.reload()} 
+            style={{ marginTop: '10px', padding: '8px 15px', cursor: 'pointer', background: '#007bff', color: 'white', border: 'none', borderRadius: '4px' }}
+          >
+            Refresh Customer List
+          </button>
         </div>
       )}
     </div>
   )
 }
-
