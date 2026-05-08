@@ -14,15 +14,12 @@ function parseFlexibleDate(dateStr) {
   let parts = trimmed.includes('/') ? trimmed.split('/') : trimmed.split('-');
   if (parts.length === 3) {
     let [d, m, y] = parts;
-    // Handle short years (e.g., 26 -> 2026)
     if (y && y.length === 2) y = "20" + y;
-    // Standardize to YYYY-MM-DD
     if (d && m && y) {
       return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
     }
   }
   
-  // Fallback: Try native JS parsing
   const d = new Date(trimmed);
   return isNaN(d.getTime()) ? null : d.toISOString().split('T')[0];
 }
@@ -55,17 +52,15 @@ export default function BulkUpload({ user }) {
         const dataToUpload = rows.map((row, index) => {
           const accountId = String(row['Account ID'] || row.account_id || '').trim();
           const name = (row['Name'] || row.name || '').trim();
-          const rawInstallDate = row['Installation Date'] || row.installation_date;
           
-          // Use the updated date parser that handles 0000-00-00
-          const formattedDate = parseFlexibleDate(rawInstallDate);
-
-          // REQUIRED: ID and Name must exist. 
-          // Note: If formattedDate is null, we allow it (saves as empty in DB)
+          // REQUIRED BY DATABASE: ID and Name
           if (!accountId || !name) {
             errorList.push(`Row ${index + 2}: Missing ID or Name`);
             return null;
           }
+
+          const rawInstallDate = row['Installation Date'] || row.installation_date;
+          const formattedDate = parseFlexibleDate(rawInstallDate);
 
           // STATUS LOGIC
           let status = 'active';
@@ -79,11 +74,12 @@ export default function BulkUpload({ user }) {
           return {
             account_id: accountId,
             name: name,
-            contact: String(row['Phone/Contact'] || row.contact || '').trim() || null,
-            address: (row['Address'] || row.address || '').trim() || null,
-            current_package: row['Service Tag/Package Type'] || row.current_package || null,
-            retention_agent: row['Retention Agent'] || row.retention_agent || null,
-            installation_date: formattedDate, // Now safely returns null if invalid/zero
+            // FIX: If contact is empty, use 'N/A' to satisfy the Database Not-Null constraint
+            contact: String(row['Phone/Contact'] || row.contact || '').trim() || 'N/A',
+            address: (row['Address'] || row.address || '').trim() || '',
+            current_package: row['Service Tag/Package Type'] || row.current_package || '',
+            retention_agent: row['Retention Agent'] || row.retention_agent || '',
+            installation_date: formattedDate,
             account_status: status,
             aav_value_usd: parseFloat(row['AAV (USD)'] || row.aav_value_usd) || 0,
             expires_in: isNaN(cleanExpiresIn) ? 0 : cleanExpiresIn,
@@ -94,7 +90,7 @@ export default function BulkUpload({ user }) {
         }).filter(r => r !== null);
 
         if (dataToUpload.length === 0) {
-          alert("Error: No valid rows found. Please check your headers.");
+          alert("Error: No valid rows found.");
           setUploading(false);
           return;
         }
@@ -124,8 +120,8 @@ export default function BulkUpload({ user }) {
     <div className="card" style={{ maxWidth: '650px', margin: '2rem auto', padding: '20px' }}>
       <h2 style={{ textAlign: 'center' }}>Bulk Upload Clients</h2>
       <p style={{ textAlign: 'center', fontSize: '0.9rem', color: '#666' }}>
-        <strong>Rules:</strong> Account ID and Name are required. <br/>
-        Installation Dates like "0000-00-00" will be saved as empty.
+        <strong>Note:</strong> Missing Phone/Contact will be saved as "N/A". <br/>
+        Zero dates (0000-00-00) will be saved as empty.
       </p>
       
       <div style={{ border: '2px dashed #007bff', padding: '30px', margin: '20px 0', borderRadius: '10px', textAlign: 'center' }}>
