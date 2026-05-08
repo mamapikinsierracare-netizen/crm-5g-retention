@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { supabase } from './supabase'
 
-// Helper function to handle various date formats (DD/MM/YYYY, YYYY-MM-DD, etc.)
+// Helper function to handle various date formats and catch "0000-00-00"
 function parseFlexibleDate(dateStr) {
-  if (!dateStr || String(dateStr).trim() === "") return null;
+  if (!dateStr || String(dateStr).trim() === "" || String(dateStr).includes("0000-00-00")) return null;
+  
   let trimmed = String(dateStr).trim();
   
   // Try YYYY-MM-DD
@@ -15,13 +16,13 @@ function parseFlexibleDate(dateStr) {
     let [d, m, y] = parts;
     // Handle short years (e.g., 26 -> 2026)
     if (y && y.length === 2) y = "20" + y;
-    // Standardize to YYYY-MM-DD for Database
+    // Standardize to YYYY-MM-DD
     if (d && m && y) {
       return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
     }
   }
   
-  // Fallback: Try native JS parsing if the above fails
+  // Fallback: Try native JS parsing
   const d = new Date(trimmed);
   return isNaN(d.getTime()) ? null : d.toISOString().split('T')[0];
 }
@@ -55,11 +56,14 @@ export default function BulkUpload({ user }) {
           const accountId = String(row['Account ID'] || row.account_id || '').trim();
           const name = (row['Name'] || row.name || '').trim();
           const rawInstallDate = row['Installation Date'] || row.installation_date;
+          
+          // Use the updated date parser that handles 0000-00-00
           const formattedDate = parseFlexibleDate(rawInstallDate);
 
-          // STRICT VALIDATION: Must have ID, Name, and a valid Installation Date
-          if (!accountId || !name || !formattedDate) {
-            errorList.push(`Row ${index + 2}: Missing ID, Name, or valid Installation Date`);
+          // REQUIRED: ID and Name must exist. 
+          // Note: If formattedDate is null, we allow it (saves as empty in DB)
+          if (!accountId || !name) {
+            errorList.push(`Row ${index + 2}: Missing ID or Name`);
             return null;
           }
 
@@ -68,7 +72,7 @@ export default function BulkUpload({ user }) {
           const rawStatus = String(row['Account Status'] || row.account_status || '').toLowerCase();
           if (rawStatus.includes('disab')) status = 'disabled';
 
-          // CLEAN NUMBER LOGIC (Fixes the "text vs integer" Database error)
+          // CLEAN NUMBER LOGIC
           const cleanExpiresIn = parseInt(row['Expires In'] || row.expires_in, 10);
           const cleanDisabledFor = parseInt(row['Disabled For'] || row.disabled_for, 10);
 
@@ -79,21 +83,18 @@ export default function BulkUpload({ user }) {
             address: (row['Address'] || row.address || '').trim() || null,
             current_package: row['Service Tag/Package Type'] || row.current_package || null,
             retention_agent: row['Retention Agent'] || row.retention_agent || null,
-            installation_date: formattedDate,
+            installation_date: formattedDate, // Now safely returns null if invalid/zero
             account_status: status,
             aav_value_usd: parseFloat(row['AAV (USD)'] || row.aav_value_usd) || 0,
-            
-            // Force values to be numbers; use 0 if the cell is empty or has text
             expires_in: isNaN(cleanExpiresIn) ? 0 : cleanExpiresIn,
             disabled_for: isNaN(cleanDisabledFor) ? 0 : cleanDisabledFor,
-            
             updated_at: new Date().toISOString(),
             updated_by: user.email
           }
         }).filter(r => r !== null);
 
         if (dataToUpload.length === 0) {
-          alert("Error: No valid rows found. Please check your headers and Installation Dates.");
+          alert("Error: No valid rows found. Please check your headers.");
           setUploading(false);
           return;
         }
@@ -123,8 +124,8 @@ export default function BulkUpload({ user }) {
     <div className="card" style={{ maxWidth: '650px', margin: '2rem auto', padding: '20px' }}>
       <h2 style={{ textAlign: 'center' }}>Bulk Upload Clients</h2>
       <p style={{ textAlign: 'center', fontSize: '0.9rem', color: '#666' }}>
-        <strong>Required:</strong> Account ID, Name, and Installation Date. <br/>
-        All other columns can be 0 or empty.
+        <strong>Rules:</strong> Account ID and Name are required. <br/>
+        Installation Dates like "0000-00-00" will be saved as empty.
       </p>
       
       <div style={{ border: '2px dashed #007bff', padding: '30px', margin: '20px 0', borderRadius: '10px', textAlign: 'center' }}>
@@ -150,7 +151,7 @@ export default function BulkUpload({ user }) {
           <p style={{ color: 'green', fontWeight: 'bold' }}>✅ Success! Processed {result.total} accounts.</p>
           {result.errors.length > 0 && (
             <details style={{ fontSize: '0.8rem', color: '#dc3545', marginTop: '10px' }}>
-              <summary>Show {result.errors.length} skipped rows (Missing Required Data)</summary>
+              <summary>Show {result.errors.length} skipped rows</summary>
               <ul style={{ maxHeight: '150px', overflowY: 'auto', marginTop: '10px' }}>
                 {result.errors.map((err, i) => <li key={i}>{err}</li>)}
               </ul>
