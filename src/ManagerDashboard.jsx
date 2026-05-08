@@ -1,6 +1,11 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from './supabase';
 import DateRangeFilter from './DateRangeFilter';
+// Professional Chart Components
+import { 
+  PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend,
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, BarChart, Bar 
+} from 'recharts';
 
 function getDateRange(range, customStart = null, customEnd = null) {
   const now = new Date();
@@ -72,7 +77,7 @@ export default function ManagerDashboard() {
   const [showCustom, setShowCustom] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  // Core Data States
+  // Original Data States
   const [callsData, setCallsData] = useState([]);
   const [clientsData, setClientsData] = useState([]);
   const [agentPerformance, setAgentPerformance] = useState([]);
@@ -86,7 +91,7 @@ export default function ManagerDashboard() {
     revenue: 0,
     uniqueClients: 0,
     avgCallDuration: 0,
-    totalAccountUniverse: 0
+    totalAccountUniverse: 0,
   });
 
   const [extendedKPIs, setExtendedKPIs] = useState({
@@ -106,25 +111,27 @@ export default function ManagerDashboard() {
     setLoading(true);
     const { start, end } = getDateRange(range, customStart, customEnd);
 
-    // 1. Fetch Calls
+    // 1. Fetch Calls with AAV Join
     let callsQuery = supabase
       .from('call_activities')
       .select('*, clients!inner(aav_value_usd)'); 
     if (range !== 'Custom' || (customStart && customEnd)) {
       callsQuery = callsQuery.gte('call_time', start).lt('call_time', end);
     }
-    const { data: calls } = await callsQuery;
+    const { data: calls, error: callsErr } = await callsQuery;
+    if (callsErr) console.error("Calls Fetch Error:", callsErr);
     const callsArray = calls || [];
     setCallsData(callsArray);
 
     // 2. Fetch Clients
-    const { data: clients } = await supabase
+    const { data: clients, error: clientsErr } = await supabase
       .from('clients')
       .select('*');
+    if (clientsErr) console.error("Clients Fetch Error:", clientsErr);
     const clientsArray = clients || [];
     setClientsData(clientsArray);
 
-    // 3. Core KPI Calculations
+    // 3. KPI Logic
     const winbackCalls = callsArray.filter(c => c.call_type === 'Winback');
     const successfulWinbacks = winbackCalls.filter(c => c.response_outcome === 'Paid').length;
     const revenue = callsArray
@@ -138,21 +145,19 @@ export default function ManagerDashboard() {
       revenue,
       uniqueClients: new Set(callsArray.map(c => c.client_account_id)).size,
       totalAccountUniverse: clientsArray.length,
-      avgCallDuration: 0 // Placeholder
+      avgCallDuration: 0
     });
 
-    // 4. Trend Grouping Logic (Original)
+    // 4. Trend Grouping (Original Logic)
     const dayCount = (new Date(end) - new Date(start)) / (1000 * 3600 * 24);
-    let groupedTrend = [];
     const trendMap = new Map();
     callsArray.forEach(call => {
       const key = dayCount <= 31 ? call.call_time.slice(0, 10) : `W${Math.ceil(new Date(call.call_time).getDate() / 7)}`;
       trendMap.set(key, (trendMap.get(key) || 0) + 1);
     });
-    groupedTrend = Array.from(trendMap.entries()).map(([date, count]) => ({ date, count })).sort((a,b) => a.date.localeCompare(b.date));
-    setTrendData(groupedTrend);
+    setTrendData(Array.from(trendMap.entries()).map(([date, count]) => ({ date, count })).sort((a,b) => a.date.localeCompare(b.date)));
 
-    // 5. Agent Leaderboard Logic (Original)
+    // 5. Agent Leaderboard (Original Logic)
     const agentMap = new Map();
     callsArray.forEach(call => {
       if (call.response_outcome === 'Paid') {
@@ -165,7 +170,7 @@ export default function ManagerDashboard() {
     const leaderboard = Array.from(agentMap.entries()).map(([email, d]) => ({ email, wins: d.wins, revenue: d.revenue }));
     setAgentPerformance(leaderboard.sort((a, b) => b.wins - a.wins).slice(0, 10));
 
-    // 6. Detailed Outcomes & Agent Breakdown Logic (Combined with Percentages)
+    // 6. Extended Stats Logic
     let activeRev = 0, disabledRev = 0, activeCount = 0, disabledCount = 0;
     clientsArray.forEach(client => {
       const aav = Number(client.aav_value_usd) || 0;
@@ -182,15 +187,12 @@ export default function ManagerDashboard() {
       if (responseOutcomes.hasOwnProperty(call.response_outcome)) responseOutcomes[call.response_outcome]++;
     });
 
+    // 7. Agent Breakdown Logic
     const allAgents = [...new Set(clientsArray.map(c => c.retention_agent).filter(Boolean))];
     const agentBreakdown = allAgents.map(agent => {
         const aClients = clientsArray.filter(c => c.retention_agent === agent);
         const aActive = aClients.filter(c => c.account_status?.toLowerCase().trim() === 'active');
         const aDisabled = aClients.filter(c => c.account_status?.toLowerCase().trim() === 'disabled');
-        const aActiveAAV = aActive.reduce((sum, c) => sum + (Number(c.aav_value_usd) || 0), 0);
-        const aDisabledAAV = aDisabled.reduce((sum, c) => sum + (Number(c.aav_value_usd) || 0), 0);
-
-        // Fetch calls specific to this agent for the detail tables
         const aCalls = callsArray.filter(c => c.agent_email === agent);
         const aOutcomes = { Answer: 0, 'Did not answer': 0, Busy: 0, Unreachable: 0 };
         const aResp = { Paid: 0, 'Promise to pay': 0, Travel: 0, 'Not interested': 0, 'To collect equipment': 0, 'No longer using our service': 0, Other: 0 };
@@ -201,14 +203,10 @@ export default function ManagerDashboard() {
 
         return {
             agent,
-            activeRevenue: aActiveAAV,
-            activeRevPct: activeRev ? ((aActiveAAV / activeRev) * 100).toFixed(1) : 0,
-            disabledRevenue: aDisabledAAV,
-            disabledRevPct: disabledRev ? ((aDisabledAAV / disabledRev) * 100).toFixed(1) : 0,
+            activeRevenue: aActive.reduce((sum, c) => sum + (Number(c.aav_value_usd) || 0), 0),
+            disabledRevenue: aDisabled.reduce((sum, c) => sum + (Number(c.aav_value_usd) || 0), 0),
             activeCount: aActive.length,
-            activeCountPct: activeCount ? ((aActive.length / activeCount) * 100).toFixed(1) : 0,
             disabledCount: aDisabled.length,
-            disabledCountPct: disabledCount ? ((aDisabled.length / disabledCount) * 100).toFixed(1) : 0,
             totalCalls: aCalls.length,
             callOutcomes: aOutcomes,
             responseOutcomes: aResp
@@ -230,24 +228,29 @@ export default function ManagerDashboard() {
 
   useEffect(() => { fetchData(); }, [range, customStart, customEnd]);
 
-  const handleRangeChange = (newRange) => {
-    setRange(newRange);
-    setShowCustom(newRange === 'Custom');
-  };
+  // --- MEMOIZED CALCULATIONS FOR VISUALS ---
+  const chartData = useMemo(() => {
+    const portfolio = [
+      { name: 'Active', value: extendedKPIs.totalActiveAccounts, color: '#007bff' },
+      { name: 'Disabled', value: extendedKPIs.totalDisabledAccounts, color: '#e91e63' }
+    ];
+    const outcomes = Object.entries(extendedKPIs.callOutcomes).map(([name, value]) => ({ name, value }));
+    const COLORS = ['#4caf50', '#ff9800', '#f44336', '#9e9e9e'];
+    return { portfolio, outcomes, COLORS };
+  }, [extendedKPIs]);
 
-  if (loading) return <div style={{ padding: '40px', textAlign: 'center' }}>Updating Intelligence Dashboard...</div>;
+  if (loading) return <div style={{ padding: '40px', textAlign: 'center' }}>Updating Manager Dashboard...</div>;
 
-  const totalAAV = extendedKPIs.activeRevenue + extendedKPIs.disabledRevenue;
-  const totalCalls = kpis.totalCalls || 1;
-  const maxTrend = Math.max(...trendData.map(d => d.count), 1);
+  const totalAAV = extendedKPIs.activeRevenue + extendedKPIs.disabledRevenue || 1;
+  const totalCallsCount = kpis.totalCalls || 1;
 
   return (
-    <div className="dashboard-container">
-      {/* HEADER & FILTERS */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', marginBottom: '1.5rem' }}>
-        <h2>Manager Strategic Dashboard</h2>
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-          <DateRangeFilter value={range} onChange={handleRangeChange} />
+    <div style={{ padding: '20px', fontFamily: 'system-ui, sans-serif' }}>
+      {/* HEADER SECTION */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', marginBottom: '20px' }}>
+        <h2 style={{ margin: 0 }}>Manager Intelligence Dashboard</h2>
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+          <DateRangeFilter value={range} onChange={setRange} />
           {showCustom && (
             <div style={{ display: 'flex', gap: '5px' }}>
               <input type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)} />
@@ -258,24 +261,24 @@ export default function ManagerDashboard() {
         </div>
       </div>
 
-      {/* KPI ROW 1: PRIMARY PORTFOLIO */}
+      {/* KPI GRID 1 */}
       <div className="stats-grid">
         <div className="stat-card">
           <div className="stat-number">{kpis.totalAccountUniverse}</div>
-          <div className="stat-label">Total Accounts (Universe)</div>
+          <div className="stat-label">Total Accounts (Active + Disabled)</div>
         </div>
         <div className="stat-card">
           <div className="stat-number">${extendedKPIs.activeRevenue.toLocaleString()}</div>
-          <div className="stat-label">Active AAV ({totalAAV ? ((extendedKPIs.activeRevenue / totalAAV) * 100).toFixed(1) : 0}%)</div>
+          <div className="stat-label">Active Portfolio AAV ({((extendedKPIs.activeRevenue / totalAAV) * 100).toFixed(1)}%)</div>
         </div>
         <div className="stat-card">
           <div className="stat-number">${extendedKPIs.disabledRevenue.toLocaleString()}</div>
-          <div className="stat-label">Disabled AAV ({totalAAV ? ((extendedKPIs.disabledRevenue / totalAAV) * 100).toFixed(1) : 0}%)</div>
+          <div className="stat-label">Disabled Portfolio AAV ({((extendedKPIs.disabledRevenue / totalAAV) * 100).toFixed(1)}%)</div>
         </div>
       </div>
 
-      {/* KPI ROW 2: ACCOUNT VOLUME & WINBACKS */}
-      <div className="stats-grid" style={{ marginTop: '1rem' }}>
+      {/* KPI GRID 2 */}
+      <div className="stats-grid" style={{ marginTop: '20px' }}>
         <div className="stat-card">
           <div className="stat-number">{extendedKPIs.totalActiveAccounts}</div>
           <div className="stat-label">Active Accounts ({((extendedKPIs.totalActiveAccounts / kpis.totalAccountUniverse) * 100).toFixed(1)}%)</div>
@@ -286,45 +289,84 @@ export default function ManagerDashboard() {
         </div>
         <div className="stat-card">
           <div className="stat-number">${kpis.revenue.toLocaleString()}</div>
-          <div className="stat-label">Paid Winback Revenue</div>
+          <div className="stat-label">Winback Revenue (Paid)</div>
         </div>
       </div>
 
-      {/* KPI ROW 3: CALL PERFORMANCE PERCENTAGES */}
-      <div className="stats-grid" style={{ marginTop: '1rem' }}>
+      {/* KPI GRID 3: CALL PERFORMANCE */}
+      <div className="stats-grid" style={{ marginTop: '20px' }}>
         <div className="stat-card">
-          <div className="stat-number" style={{ color: '#4caf50' }}>{((extendedKPIs.callOutcomes.Answer / totalCalls) * 100).toFixed(1)}%</div>
-          <div className="stat-label">Answer Rate</div>
+          <div className="stat-number" style={{ color: '#4caf50' }}>{((extendedKPIs.callOutcomes.Answer / totalCallsCount) * 100).toFixed(1)}%</div>
+          <div className="stat-label">Call Answer Rate</div>
         </div>
         <div className="stat-card">
-          <div className="stat-number" style={{ color: '#ff9800' }}>{((extendedKPIs.callOutcomes['Did not answer'] / totalCalls) * 100).toFixed(1)}%</div>
+          <div className="stat-number" style={{ color: '#ff9800' }}>{((extendedKPIs.callOutcomes['Did not answer'] / totalCallsCount) * 100).toFixed(1)}%</div>
           <div className="stat-label">No Answer Rate</div>
         </div>
         <div className="stat-card">
-          <div className="stat-number" style={{ color: '#f44336' }}>{((extendedKPIs.callOutcomes.Busy / totalCalls) * 100).toFixed(1)}%</div>
+          <div className="stat-number" style={{ color: '#f44336' }}>{((extendedKPIs.callOutcomes.Busy / totalCallsCount) * 100).toFixed(1)}%</div>
           <div className="stat-label">Busy Rate</div>
         </div>
         <div className="stat-card">
-          <div className="stat-number" style={{ color: '#9e9e9e' }}>{((extendedKPIs.callOutcomes.Unreachable / totalCalls) * 100).toFixed(1)}%</div>
+          <div className="stat-number" style={{ color: '#9e9e9e' }}>{((extendedKPIs.callOutcomes.Unreachable / totalCallsCount) * 100).toFixed(1)}%</div>
           <div className="stat-label">Unreachable Rate</div>
         </div>
       </div>
 
-      {/* TREND CHART */}
-      <div className="card" style={{ marginTop: '2rem', padding: '1.5rem' }}>
-        <h3>Call Activity Trend</h3>
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end', height: '180px', marginTop: '1rem', borderBottom: '2px solid #eee' }}>
-          {trendData.map(item => (
-            <div key={item.date} style={{ flex: 1, backgroundColor: 'var(--primary, #007bff)', height: `${(item.count / maxTrend) * 100}%`, borderRadius: '4px 4px 0 0', position: 'relative' }} title={`${item.date}: ${item.count}`}>
-               <span style={{ position: 'absolute', bottom: '-25px', left: '50%', transform: 'translateX(-50%)', fontSize: '0.65rem', whiteSpace: 'nowrap' }}>{item.date.split('-').slice(1).join('/')}</span>
-            </div>
-          ))}
+      {/* NEW: PROFESSIONAL VISUAL INSIGHTS SECTION */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '20px', marginTop: '30px' }}>
+        {/* Trend Area Chart */}
+        <div className="card" style={{ height: '350px', padding: '20px' }}>
+          <h3>Call Activity Trend</h3>
+          <ResponsiveContainer width="100%" height="90%">
+            <AreaChart data={trendData}>
+              <defs>
+                <linearGradient id="colorCount" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#007bff" stopOpacity={0.8}/>
+                  <stop offset="95%" stopColor="#007bff" stopOpacity={0}/>
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="date" fontSize={10} tickMargin={10} />
+              <YAxis fontSize={10} />
+              <Tooltip />
+              <Area type="monotone" dataKey="count" stroke="#007bff" fillOpacity={1} fill="url(#colorCount)" />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* Portfolio Pie Chart */}
+        <div className="card" style={{ height: '350px', padding: '20px' }}>
+          <h3>Portfolio Composition</h3>
+          <ResponsiveContainer width="100%" height="90%">
+            <PieChart>
+              <Pie data={chartData.portfolio} innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value">
+                {chartData.portfolio.map((entry, index) => <Cell key={`cell-${index}`} fill={entry.color} />)}
+              </Pie>
+              <Tooltip />
+              <Legend verticalAlign="bottom" height={36}/>
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* Outcome Pie Chart */}
+        <div className="card" style={{ height: '350px', padding: '20px' }}>
+          <h3>Call Outcome Split</h3>
+          <ResponsiveContainer width="100%" height="90%">
+            <PieChart>
+              <Pie data={chartData.outcomes} outerRadius={80} dataKey="value">
+                {chartData.outcomes.map((entry, index) => <Cell key={`cell-${index}`} fill={chartData.COLORS[index % chartData.COLORS.length]} />)}
+              </Pie>
+              <Tooltip />
+              <Legend verticalAlign="bottom" height={36}/>
+            </PieChart>
+          </ResponsiveContainer>
         </div>
       </div>
 
-      {/* AGENT STRATEGIC TABLE (Dual Metric columns) */}
-      <div className="table-container" style={{ marginTop: '3rem' }}>
-        <h3 style={{ padding: '1rem' }}>Agent Portfolio Performance (% Contribution)</h3>
+      {/* ORIGINAL TABLES (PRESERVED) */}
+      <div className="table-container" style={{ marginTop: '30px' }}>
+        <h3 style={{ padding: '15px' }}>Agent Performance Details (% Contribution)</h3>
         <div style={{ overflowX: 'auto' }}>
           <table>
             <thead>
@@ -342,19 +384,19 @@ export default function ManagerDashboard() {
                   <td style={{ padding: '12px', fontWeight: '600' }}>{agent.agent}</td>
                   <td>
                     <div style={{ fontWeight: '600' }}>${agent.activeRevenue.toLocaleString()}</div>
-                    <div style={{ fontSize: '0.75rem', color: '#007bff' }}>{agent.activeRevPct}% of Portfolio</div>
+                    <div style={{ fontSize: '0.75rem', color: '#007bff' }}>{((agent.activeRevenue / extendedKPIs.activeRevenue) * 100 || 0).toFixed(1)}% of Active</div>
                   </td>
                   <td>
                     <div style={{ fontWeight: '600' }}>${agent.disabledRevenue.toLocaleString()}</div>
-                    <div style={{ fontSize: '0.75rem', color: '#e91e63' }}>{agent.disabledRevPct}% of Portfolio</div>
+                    <div style={{ fontSize: '0.75rem', color: '#e91e63' }}>{((agent.disabledRevenue / extendedKPIs.disabledRevenue) * 100 || 0).toFixed(1)}% of Disabled</div>
                   </td>
                   <td>
                     <div style={{ fontWeight: '600' }}>{agent.activeCount}</div>
-                    <div style={{ fontSize: '0.75rem', color: '#666' }}>{agent.activeCountPct}% Load</div>
+                    <div style={{ fontSize: '0.75rem', color: '#666' }}>{((agent.activeCount / extendedKPIs.totalActiveAccounts) * 100 || 0).toFixed(1)}% Load</div>
                   </td>
                   <td>
                     <div style={{ fontWeight: '600' }}>{agent.disabledCount}</div>
-                    <div style={{ fontSize: '0.75rem', color: '#666' }}>{agent.disabledCountPct}% Load</div>
+                    <div style={{ fontSize: '0.75rem', color: '#666' }}>{((agent.disabledCount / extendedKPIs.totalDisabledAccounts) * 100 || 0).toFixed(1)}% Load</div>
                   </td>
                 </tr>
               ))}
@@ -363,26 +405,8 @@ export default function ManagerDashboard() {
         </div>
       </div>
 
-      {/* TOP AGENT LEADERBOARD */}
-      <div className="table-container" style={{ marginTop: '2rem' }}>
-        <h3 style={{ padding: '1rem' }}>Top Agent Winback Results</h3>
-        <table>
-          <thead>
-            <tr><th>Agent Email</th><th>Wins</th><th>Revenue Generated</th></tr>
-          </thead>
-          <tbody>
-            {agentPerformance.length === 0 ? <tr><td colSpan={3} style={{ textAlign: 'center' }}>No winback data for this period</td></tr> :
-              agentPerformance.map(agent => (
-                <tr key={agent.email}><td>{agent.email}</td><td>{agent.wins}</td><td>${agent.revenue.toLocaleString()}</td></tr>
-              ))
-            }
-          </tbody>
-        </table>
-      </div>
-
-      {/* AGENT CALL & RESPONSE OUTCOME TABLES (Original Full Tables) */}
-      <div className="table-container" style={{ marginTop: '2rem' }}>
-        <h3 style={{ padding: '1rem' }}>Agent Call Outcomes (Answer, Busy, etc)</h3>
+      <div className="table-container" style={{ marginTop: '30px' }}>
+        <h3 style={{ padding: '15px' }}>Agent Call Outcomes (Detailed)</h3>
         <div style={{ overflowX: 'auto' }}>
           <table>
             <thead>
@@ -399,8 +423,8 @@ export default function ManagerDashboard() {
         </div>
       </div>
 
-      <div className="table-container" style={{ marginTop: '2rem', marginBottom: '3rem' }}>
-        <h3 style={{ padding: '1rem' }}>Response Outcomes (Paid, Promise, etc)</h3>
+      <div className="table-container" style={{ marginTop: '30px', marginBottom: '50px' }}>
+        <h3 style={{ padding: '15px' }}>Response Outcomes Summary</h3>
         <div style={{ overflowX: 'auto' }}>
           <table>
             <thead>
@@ -413,7 +437,12 @@ export default function ManagerDashboard() {
                 </tr>
               ))}
               <tr style={{ background: '#f8f9fa', fontWeight: 'bold' }}>
-                <td>TOTAL</td><td>{extendedKPIs.responseOutcomes.Paid}</td><td>{extendedKPIs.responseOutcomes['Promise to pay']}</td><td>{extendedKPIs.responseOutcomes.Travel}</td><td>{extendedKPIs.responseOutcomes['Not interested']}</td><td>{extendedKPIs.responseOutcomes.Other}</td>
+                <td>GRAND TOTAL</td>
+                <td>{extendedKPIs.responseOutcomes.Paid}</td>
+                <td>{extendedKPIs.responseOutcomes['Promise to pay']}</td>
+                <td>{extendedKPIs.responseOutcomes.Travel}</td>
+                <td>{extendedKPIs.responseOutcomes['Not interested']}</td>
+                <td>{extendedKPIs.responseOutcomes.Other}</td>
               </tr>
             </tbody>
           </table>
