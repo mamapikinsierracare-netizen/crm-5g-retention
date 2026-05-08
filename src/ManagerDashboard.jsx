@@ -15,35 +15,42 @@ function getDateRange(range, customStart = null, customEnd = null) {
       return { start: today.toISOString(), end: new Date(today.getTime() + 86400000).toISOString() };
     case 'This Week':
       return { start: startOfWeek.toISOString(), end: new Date(endOfWeek.getTime() + 86400000).toISOString() };
-    case 'Last Week':
+    case 'Last Week': {
       const lastWeekStart = new Date(startOfWeek);
       lastWeekStart.setDate(startOfWeek.getDate() - 7);
       const lastWeekEnd = new Date(lastWeekStart);
       lastWeekEnd.setDate(lastWeekStart.getDate() + 6);
       return { start: lastWeekStart.toISOString(), end: new Date(lastWeekEnd.getTime() + 86400000).toISOString() };
-    case 'This Month':
+    }
+    case 'This Month': {
       const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
       const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
       return { start: monthStart.toISOString(), end: new Date(monthEnd.getTime() + 86400000).toISOString() };
-    case 'Last Month':
+    }
+    case 'Last Month': {
       const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
       const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
       return { start: lastMonthStart.toISOString(), end: new Date(lastMonthEnd.getTime() + 86400000).toISOString() };
-    case 'Last 3 Months':
+    }
+    case 'Last 3 Months': {
       const threeMonthsAgo = new Date(now);
       threeMonthsAgo.setMonth(now.getMonth() - 3);
       return { start: threeMonthsAgo.toISOString(), end: today.toISOString() };
-    case 'Last 6 Months':
+    }
+    case 'Last 6 Months': {
       const sixMonthsAgo = new Date(now);
       sixMonthsAgo.setMonth(now.getMonth() - 6);
       return { start: sixMonthsAgo.toISOString(), end: today.toISOString() };
-    case 'This Year':
+    }
+    case 'This Year': {
       const yearStart = new Date(now.getFullYear(), 0, 1);
       return { start: yearStart.toISOString(), end: today.toISOString() };
-    case 'Past Years':
+    }
+    case 'Past Years': {
       const pastYearsEnd = new Date(now.getFullYear(), 0, 1);
       return { start: '1970-01-01T00:00:00Z', end: pastYearsEnd.toISOString() };
-    case 'Custom':
+    }
+    case 'Custom': {
       if (customStart && customEnd) {
         const startDate = new Date(customStart);
         startDate.setHours(0, 0, 0, 0);
@@ -52,6 +59,7 @@ function getDateRange(range, customStart = null, customEnd = null) {
         return { start: startDate.toISOString(), end: endDate.toISOString() };
       }
       return { start: today.toISOString(), end: new Date(today.getTime() + 86400000).toISOString() };
+    }
     default:
       return { start: today.toISOString(), end: new Date(today.getTime() + 86400000).toISOString() };
   }
@@ -91,30 +99,36 @@ export default function ManagerDashboard() {
     setLoading(true);
     const { start, end } = getDateRange(range, customStart, customEnd);
 
+    // Fetch Calls and join with clients to get their current AAV value
     let callsQuery = supabase
       .from('call_activities')
-      .select('*, clients(account_id)');
+      .select('*, clients!inner(aav_value_usd)'); 
+      
     if (range !== 'Custom' || (customStart && customEnd)) {
       callsQuery = callsQuery.gte('call_time', start).lt('call_time', end);
     }
     const { data: calls, error: callsErr } = await callsQuery;
-    if (callsErr) console.error(callsErr);
+    if (callsErr) console.error("Calls Fetch Error:", callsErr);
     const callsArray = calls || [];
 
+    // Fetch all Clients for Portfolio stats
     const { data: clients, error: clientsErr } = await supabase
       .from('clients')
       .select('account_id, account_status, retention_agent, aav_value_usd');
-    if (clientsErr) console.error(clientsErr);
+    if (clientsErr) console.error("Clients Fetch Error:", clientsErr);
     const clientsArray = clients || [];
 
-    // Existing KPIs
+    // 1. Core KPIs
     const totalCalls = callsArray.length;
     const winbackCalls = callsArray.filter(c => c.call_type === 'Winback');
     const successfulWinbacks = winbackCalls.filter(c => c.response_outcome === 'Paid').length;
     const winbackConversionRate = winbackCalls.length ? (successfulWinbacks / winbackCalls.length) * 100 : 0;
+    
+    // Revenue calculated from current AAV of clients who were marked as 'Paid' during the call
     const revenue = callsArray
       .filter(c => c.response_outcome === 'Paid')
-      .reduce((sum, c) => sum + (c.package_price_at_time || 0), 0);
+      .reduce((sum, c) => sum + (Number(c.clients?.aav_value_usd) || 0), 0);
+      
     const uniqueClients = new Set(callsArray.map(c => c.client_account_id)).size;
     let avgCallDuration = 0;
     const durations = callsArray.map(c => c.call_duration_seconds).filter(d => d && d > 0);
@@ -130,13 +144,13 @@ export default function ManagerDashboard() {
       avgCallDuration: Math.round(avgCallDuration),
     });
 
-    // Agent leaderboard (top by winbacks)
+    // 2. Agent leaderboard
     const agentMap = new Map();
     callsArray.forEach(call => {
       if (call.response_outcome === 'Paid') {
         const existing = agentMap.get(call.agent_email) || { wins: 0, revenue: 0 };
         existing.wins += 1;
-        existing.revenue += (call.package_price_at_time || 0);
+        existing.revenue += (Number(call.clients?.aav_value_usd) || 0);
         agentMap.set(call.agent_email, existing);
       }
     });
@@ -144,7 +158,7 @@ export default function ManagerDashboard() {
     leaderboardArray.sort((a, b) => b.wins - a.wins);
     setAgentPerformance(leaderboardArray.slice(0, 10));
 
-    // Trend data
+    // 3. Trend data
     const dayCount = (new Date(end) - new Date(start)) / (1000 * 3600 * 24);
     let grouped;
     if (dayCount <= 31) {
@@ -169,15 +183,16 @@ export default function ManagerDashboard() {
     }
     setTrendData(grouped);
 
-    // Extended KPIs: revenue splits, call outcomes, response outcomes, agent breakdown
+    // 4. Extended Portfolio Stats
     let activeRev = 0, disabledRev = 0;
     let activeCount = 0, disabledCount = 0;
     clientsArray.forEach(client => {
-      const aav = client.aav_value_usd || 0;
-      if (client.account_status === 'Active') {
+      const aav = Number(client.aav_value_usd) || 0;
+      const status = (client.account_status || '').toLowerCase().trim();
+      if (status === 'active') {
         activeRev += aav;
         activeCount++;
-      } else if (client.account_status === 'Disabled') {
+      } else if (status === 'disabled') {
         disabledRev += aav;
         disabledCount++;
       }
@@ -207,6 +222,7 @@ export default function ManagerDashboard() {
       }
     });
 
+    // 5. Agent breakdown
     const allAgents = [...new Set(clientsArray.map(c => c.retention_agent).filter(Boolean))];
     const agentBreakdownMap = new Map();
     allAgents.forEach(agent => {
@@ -221,19 +237,22 @@ export default function ManagerDashboard() {
         },
       });
     });
+    
     clientsArray.forEach(client => {
       const agent = client.retention_agent;
       if (!agent || !agentBreakdownMap.has(agent)) return;
-      const aav = client.aav_value_usd || 0;
+      const aav = Number(client.aav_value_usd) || 0;
       const rec = agentBreakdownMap.get(agent);
-      if (client.account_status === 'Active') {
+      const status = (client.account_status || '').toLowerCase().trim();
+      if (status === 'active') {
         rec.activeRevenue += aav;
         rec.activeCount++;
-      } else if (client.account_status === 'Disabled') {
+      } else if (status === 'disabled') {
         rec.disabledRevenue += aav;
         rec.disabledCount++;
       }
     });
+
     callsArray.forEach(call => {
       const agent = call.agent_email;
       if (!agent || !agentBreakdownMap.has(agent)) return;
@@ -255,6 +274,7 @@ export default function ManagerDashboard() {
         else if (resp === 'Other') rec.responseOutcomes.Other++;
       }
     });
+    
     const agentBreakdown = Array.from(agentBreakdownMap.entries()).map(([agent, data]) => ({ agent, ...data }));
 
     setExtendedKPIs({
@@ -270,7 +290,6 @@ export default function ManagerDashboard() {
   };
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchData();
   }, [range, customStart, customEnd]);
 
@@ -290,7 +309,7 @@ export default function ManagerDashboard() {
     }
   };
 
-  if (loading) return <div>Loading manager dashboard...</div>;
+  if (loading) return <div style={{ padding: '20px', textAlign: 'center' }}>Loading manager dashboard...</div>;
 
   const maxCount = Math.max(...trendData.map(d => d.count), 1);
   const isDaily = trendData.length > 0 && trendData[0].date.includes('-W') === false;
@@ -299,7 +318,7 @@ export default function ManagerDashboard() {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', marginBottom: '1rem' }}>
-        <h2>Manager Dashboard – Key Performance Indicators</h2>
+        <h2>Manager Dashboard – KPIs</h2>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
           <DateRangeFilter value={range} onChange={handleRangeChange} />
           {showCustom && (
@@ -313,27 +332,24 @@ export default function ManagerDashboard() {
         </div>
       </div>
 
-      {/* Original KPI cards */}
       <div className="stats-grid">
         <div className="stat-card"><div className="stat-number">{kpis.totalCalls}</div><div className="stat-label">Total Calls</div></div>
         <div className="stat-card"><div className="stat-number">{kpis.successfulWinbacks}</div><div className="stat-label">Successful Winbacks</div></div>
         <div className="stat-card"><div className="stat-number">{kpis.winbackConversionRate}%</div><div className="stat-label">Winback Conversion</div></div>
-        <div className="stat-card"><div className="stat-number">${kpis.revenue.toLocaleString()}</div><div className="stat-label">Revenue</div></div>
+        <div className="stat-card"><div className="stat-number">${Number(kpis.revenue).toLocaleString(undefined, {minimumFractionDigits: 2})}</div><div className="stat-label">Paid Revenue (AAV)</div></div>
         <div className="stat-card"><div className="stat-number">{kpis.uniqueClients}</div><div className="stat-label">Unique Clients</div></div>
         {kpis.avgCallDuration > 0 && (
           <div className="stat-card"><div className="stat-number">{kpis.avgCallDuration}s</div><div className="stat-label">Avg Call Duration</div></div>
         )}
       </div>
 
-      {/* Active/Disabled Revenue & Accounts */}
       <div className="stats-grid" style={{ marginTop: '1rem' }}>
-        <div className="stat-card"><div className="stat-number">${activeRevenue.toFixed(2)}</div><div className="stat-label">Active Revenue (USD)</div></div>
-        <div className="stat-card"><div className="stat-number">${disabledRevenue.toFixed(2)}</div><div className="stat-label">Disabled Revenue (USD)</div></div>
+        <div className="stat-card"><div className="stat-number">${Number(activeRevenue).toFixed(2)}</div><div className="stat-label">Active Portfolio AAV</div></div>
+        <div className="stat-card"><div className="stat-number">${Number(disabledRevenue).toFixed(2)}</div><div className="stat-label">Disabled Portfolio AAV</div></div>
         <div className="stat-card"><div className="stat-number">{totalActiveAccounts}</div><div className="stat-label">Active Accounts</div></div>
         <div className="stat-card"><div className="stat-number">{totalDisabledAccounts}</div><div className="stat-label">Disabled Accounts</div></div>
       </div>
 
-      {/* Team Call Outcomes cards */}
       <div className="stats-grid" style={{ marginTop: '1rem' }}>
         <div className="stat-card"><div className="stat-number">{callOutcomes.Answer}</div><div className="stat-label">Answered Calls</div></div>
         <div className="stat-card"><div className="stat-number">{callOutcomes['Did not answer']}</div><div className="stat-label">Did Not Answer</div></div>
@@ -341,7 +357,6 @@ export default function ManagerDashboard() {
         <div className="stat-card"><div className="stat-number">{callOutcomes.Unreachable}</div><div className="stat-label">Unreachable</div></div>
       </div>
 
-      {/* Call Trend Chart */}
       <div className="card" style={{ marginBottom: '2rem' }}>
         <h3 style={{ marginBottom: '1rem' }}>Call Trend ({isDaily ? 'daily' : 'weekly'})</h3>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end', justifyContent: 'space-around', flexWrap: 'wrap' }}>
@@ -362,29 +377,22 @@ export default function ManagerDashboard() {
         </div>
       </div>
 
-      {/* Top Agent Performance (by winbacks) */}
       <div className="table-container" style={{ marginBottom: '2rem' }}>
-        <h3 style={{ padding: '1rem 1rem 0 1rem' }}>Top Agent Performance (by successful winbacks)</h3>
+        <h3 style={{ padding: '1rem 1rem 0 1rem' }}>Top Agent Performance (by winbacks)</h3>
         <div style={{ overflowX: 'auto' }}>
-          <table>
+          <table style={{ minWidth: '600px' }}>
             <thead>
               <tr>
-                <th>Agent</th>
-                <th>Successful Winbacks</th>
-                <th>Revenue Generated</th>
+                <th>Agent</th><th>Successful Winbacks</th><th>Revenue Generated (AAV)</th>
               </tr>
             </thead>
             <tbody>
               {agentPerformance.length === 0 ? (
-                <tr>
-                  <td colSpan={3} style={{ textAlign: 'center', padding: '2rem' }}>No winback data in this period</td>
-                </tr>
+                <tr><td colSpan={3} style={{ textAlign: 'center', padding: '2rem' }}>No winback data</td></tr>
               ) : (
                 agentPerformance.map(agent => (
                   <tr key={agent.email}>
-                    <td>{agent.email}</td>
-                    <td>{agent.wins}</td>
-                    <td>${agent.revenue.toLocaleString()}</td>
+                    <td>{agent.email}</td><td>{agent.wins}</td><td>${Number(agent.revenue).toFixed(2)}</td>
                   </tr>
                 ))
               )}
@@ -393,15 +401,14 @@ export default function ManagerDashboard() {
         </div>
       </div>
 
-      {/* Agent Breakdown Table */}
       <div className="table-container" style={{ marginBottom: '2rem' }}>
         <h3 style={{ padding: '1rem 1rem 0 1rem' }}>Agent Performance Details</h3>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ minWidth: '800px' }}>
             <thead>
               <tr>
-                <th>Agent</th><th>Active Rev (USD)</th><th>Disabled Rev</th><th>Active Accts</th><th>Disabled Accts</th>
-                <th>Total Calls</th><th>Answer</th><th>Did not answer</th><th>Busy</th><th>Unreachable</th>
+                <th>Agent</th><th>Active AAV</th><th>Disabled AAV</th><th>Active Accts</th><th>Disabled Accts</th>
+                <th>Calls</th><th>Answer</th><th>No Ans</th><th>Busy</th><th>Unreach</th>
               </tr>
             </thead>
             <tbody>
@@ -424,7 +431,6 @@ export default function ManagerDashboard() {
         </div>
       </div>
 
-      {/* Response Outcomes Table */}
       <div className="table-container" style={{ marginBottom: '2rem' }}>
         <h3 style={{ padding: '1rem 1rem 0 1rem' }}>Response Outcomes (Winback / Payment Reminder)</h3>
         <div style={{ overflowX: 'auto' }}>
