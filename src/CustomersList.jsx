@@ -26,7 +26,6 @@ export default function CustomersList({ user }) {
   
   const fetchDropdownOptions = async () => {
     try {
-      // Fetch unique package options
       const { data: packages } = await supabase
         .from('clients')
         .select('current_package')
@@ -34,7 +33,6 @@ export default function CustomersList({ user }) {
       let uniquePackages = [...new Set(packages?.map(p => p.current_package?.trim()).filter(Boolean))];
       setPackageOptions(uniquePackages);
       
-      // Fetch unique agent options
       const { data: agents } = await supabase
         .from('clients')
         .select('retention_agent')
@@ -42,8 +40,6 @@ export default function CustomersList({ user }) {
       let uniqueAgents = [...new Set(agents?.map(a => a.retention_agent?.trim()).filter(Boolean))];
       setAgentOptions(uniqueAgents);
       
-      // PERMANENT FIX: Always show both Active and Disabled in the status dropdown
-      // (No database query needed – guarantees the dropdown works regardless of data)
       setStatusOptions(['Active', 'Disabled']);
     } catch (err) {
       console.error(err);
@@ -136,8 +132,8 @@ export default function CustomersList({ user }) {
     }
     const headers = [
       'Account ID', 'Name', 'Phone', 'Address', 'Package',
-      'Price (USD)', 'Price (NLe)', 'Retention Agent', 'Installation Date', 'Status',
-      'AAV Value (USD)', 'Expiry Date', 'Disabled Reason'
+      'AAV (USD)', 'Price (NLe)', 'Retention Agent', 'Installation Date', 'Status',
+      'Expires In', 'Disabled For'
     ];
     const rows = filtered.map(client => [
       client.account_id,
@@ -145,14 +141,13 @@ export default function CustomersList({ user }) {
       client.contact,
       client.address || '',
       client.current_package || '',
-      client.package_price || 0,
-      client.package_price_nle || '',
+      client.aav_value_usd || 0,
+      client.package_price_nle || 0,
       client.retention_agent || '',
       client.installation_date || '',
       client.account_status || 'active',
-      client.aav_value_usd || '',
-      client.expiry_date || '',
-      client.disabled_reason || ''
+      client.expires_in || 0,
+      client.disabled_for || 0
     ]);
     const csvContent = [
       headers.join(','),
@@ -167,17 +162,6 @@ export default function CustomersList({ user }) {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-  };
-  
-  const getExpiresInText = (expiryDate) => {
-    if (!expiryDate) return '-';
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const expiry = new Date(expiryDate);
-    const diffDays = Math.ceil((expiry - today) / (1000 * 60 * 60 * 24));
-    if (diffDays < 0) return 'Expired';
-    if (diffDays === 0) return 'Today';
-    return `${diffDays} days`;
   };
   
   const handleRowClick = (customer) => {
@@ -265,20 +249,19 @@ export default function CustomersList({ user }) {
                 <th>Phone</th>
                 <th>Address</th>
                 <th>Package</th>
-                <th>Price (USD)</th>
+                <th>AAV (USD)</th>
                 <th>Price (NLe)</th>
                 <th>Retention Agent</th>
                 <th>Installation Date</th>
                 <th>Status</th>
-                <th>AAV (USD)</th>
                 <th>Expires In</th>
-                <th>Disabled Reason</th>
+                <th>Disabled For</th>
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={13} style={{ textAlign: 'center' }}>No customers found</td>
+                  <td colSpan={12} style={{ textAlign: 'center' }}>No customers found</td>
                 </tr>
               ) : (
                 filtered.map(client => (
@@ -294,14 +277,13 @@ export default function CustomersList({ user }) {
                     <td>{client.contact}</td>
                     <td>{client.address || '-'}</td>
                     <td>{client.current_package || '-'}</td>
-                    <td>${client.package_price || 0}</td>
+                    <td>{client.aav_value_usd ? `$${client.aav_value_usd}` : '-'}</td>
                     <td>{client.package_price_nle ? `NLe ${client.package_price_nle.toFixed(2)}` : '-'}</td>
                     <td>{client.retention_agent || '-'}</td>
                     <td>{client.installation_date || '-'}</td>
                     <td>{client.account_status || 'active'}</td>
-                    <td>{client.aav_value_usd ? `$${client.aav_value_usd}` : '-'}</td>
-                    <td>{getExpiresInText(client.expiry_date)}</td>
-                    <td>{client.disabled_reason || '-'}</td>
+                    <td>{client.expires_in !== null ? `${client.expires_in} days` : '-'}</td>
+                    <td>{client.disabled_for !== null ? `${client.disabled_for} days` : '-'}</td>
                   </tr>
                 ))
               )}
@@ -345,7 +327,6 @@ export default function CustomersList({ user }) {
             </div>
             <div style={{ marginBottom: '0.5rem' }}>
               <strong>Package:</strong> {selectedCustomer.current_package || '-'}
-              {selectedCustomer.package_price ? ` - USD $${selectedCustomer.package_price}` : ''}
             </div>
             <div style={{ marginBottom: '0.5rem' }}>
               <strong>Installation Date:</strong> {selectedCustomer.installation_date || '-'}
@@ -367,11 +348,13 @@ export default function CustomersList({ user }) {
               <strong>AAV Value (USD):</strong> {selectedCustomer.aav_value_usd ? `$${selectedCustomer.aav_value_usd}` : '-'}
             </div>
             <div style={{ marginBottom: '0.5rem' }}>
-              <strong>Expiry Date:</strong> {selectedCustomer.expiry_date || '-'}
-              {selectedCustomer.expiry_date && ` (${getExpiresInText(selectedCustomer.expiry_date)})`}
+              <strong>Price (NLe):</strong> {selectedCustomer.package_price_nle ? `NLe ${selectedCustomer.package_price_nle.toFixed(2)}` : '-'}
             </div>
             <div style={{ marginBottom: '0.5rem' }}>
-              <strong>Disabled Reason:</strong> {selectedCustomer.disabled_reason || '-'}
+              <strong>Expires In:</strong> {selectedCustomer.expires_in !== null ? `${selectedCustomer.expires_in} days` : '-'}
+            </div>
+            <div style={{ marginBottom: '0.5rem' }}>
+              <strong>Disabled For:</strong> {selectedCustomer.disabled_for !== null ? `${selectedCustomer.disabled_for} days` : '-'}
             </div>
             
             {user?.role === 'agent' && (
