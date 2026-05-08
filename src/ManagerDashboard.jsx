@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { supabase } from './supabase';
 import DateRangeFilter from './DateRangeFilter';
 
@@ -70,6 +70,15 @@ export default function ManagerDashboard() {
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
   const [showCustom, setShowCustom] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  // Core Data States
+  const [callsData, setCallsData] = useState([]);
+  const [clientsData, setClientsData] = useState([]);
+  const [agentPerformance, setAgentPerformance] = useState([]);
+  const [trendData, setTrendData] = useState([]);
+
+  // KPI States
   const [kpis, setKpis] = useState({
     totalCalls: 0,
     successfulWinbacks: 0,
@@ -77,10 +86,8 @@ export default function ManagerDashboard() {
     revenue: 0,
     uniqueClients: 0,
     avgCallDuration: 0,
+    totalAccountUniverse: 0
   });
-  const [agentPerformance, setAgentPerformance] = useState([]);
-  const [trendData, setTrendData] = useState([]);
-  const [loading, setLoading] = useState(true);
 
   const [extendedKPIs, setExtendedKPIs] = useState({
     activeRevenue: 0,
@@ -99,52 +106,53 @@ export default function ManagerDashboard() {
     setLoading(true);
     const { start, end } = getDateRange(range, customStart, customEnd);
 
-    // Fetch Calls and join with clients to get their current AAV value
+    // 1. Fetch Calls
     let callsQuery = supabase
       .from('call_activities')
       .select('*, clients!inner(aav_value_usd)'); 
-      
     if (range !== 'Custom' || (customStart && customEnd)) {
       callsQuery = callsQuery.gte('call_time', start).lt('call_time', end);
     }
-    const { data: calls, error: callsErr } = await callsQuery;
-    if (callsErr) console.error("Calls Fetch Error:", callsErr);
+    const { data: calls } = await callsQuery;
     const callsArray = calls || [];
+    setCallsData(callsArray);
 
-    // Fetch all Clients for Portfolio stats
-    const { data: clients, error: clientsErr } = await supabase
+    // 2. Fetch Clients
+    const { data: clients } = await supabase
       .from('clients')
-      .select('account_id, account_status, retention_agent, aav_value_usd');
-    if (clientsErr) console.error("Clients Fetch Error:", clientsErr);
+      .select('*');
     const clientsArray = clients || [];
+    setClientsData(clientsArray);
 
-    // 1. Core KPIs
-    const totalCalls = callsArray.length;
+    // 3. Core KPI Calculations
     const winbackCalls = callsArray.filter(c => c.call_type === 'Winback');
     const successfulWinbacks = winbackCalls.filter(c => c.response_outcome === 'Paid').length;
-    const winbackConversionRate = winbackCalls.length ? (successfulWinbacks / winbackCalls.length) * 100 : 0;
-    
-    // Revenue calculated from current AAV of clients who were marked as 'Paid' during the call
     const revenue = callsArray
       .filter(c => c.response_outcome === 'Paid')
       .reduce((sum, c) => sum + (Number(c.clients?.aav_value_usd) || 0), 0);
-      
-    const uniqueClients = new Set(callsArray.map(c => c.client_account_id)).size;
-    let avgCallDuration = 0;
-    const durations = callsArray.map(c => c.call_duration_seconds).filter(d => d && d > 0);
-    if (durations.length) {
-      avgCallDuration = durations.reduce((a, b) => a + b, 0) / durations.length;
-    }
+
     setKpis({
-      totalCalls,
+      totalCalls: callsArray.length,
       successfulWinbacks,
-      winbackConversionRate: winbackConversionRate.toFixed(1),
+      winbackConversionRate: winbackCalls.length ? ((successfulWinbacks / winbackCalls.length) * 100).toFixed(1) : 0,
       revenue,
-      uniqueClients,
-      avgCallDuration: Math.round(avgCallDuration),
+      uniqueClients: new Set(callsArray.map(c => c.client_account_id)).size,
+      totalAccountUniverse: clientsArray.length,
+      avgCallDuration: 0 // Placeholder
     });
 
-    // 2. Agent leaderboard
+    // 4. Trend Grouping Logic (Original)
+    const dayCount = (new Date(end) - new Date(start)) / (1000 * 3600 * 24);
+    let groupedTrend = [];
+    const trendMap = new Map();
+    callsArray.forEach(call => {
+      const key = dayCount <= 31 ? call.call_time.slice(0, 10) : `W${Math.ceil(new Date(call.call_time).getDate() / 7)}`;
+      trendMap.set(key, (trendMap.get(key) || 0) + 1);
+    });
+    groupedTrend = Array.from(trendMap.entries()).map(([date, count]) => ({ date, count })).sort((a,b) => a.date.localeCompare(b.date));
+    setTrendData(groupedTrend);
+
+    // 5. Agent Leaderboard Logic (Original)
     const agentMap = new Map();
     callsArray.forEach(call => {
       if (call.response_outcome === 'Paid') {
@@ -154,128 +162,58 @@ export default function ManagerDashboard() {
         agentMap.set(call.agent_email, existing);
       }
     });
-    const leaderboardArray = Array.from(agentMap.entries()).map(([email, data]) => ({ email, wins: data.wins, revenue: data.revenue }));
-    leaderboardArray.sort((a, b) => b.wins - a.wins);
-    setAgentPerformance(leaderboardArray.slice(0, 10));
+    const leaderboard = Array.from(agentMap.entries()).map(([email, d]) => ({ email, wins: d.wins, revenue: d.revenue }));
+    setAgentPerformance(leaderboard.sort((a, b) => b.wins - a.wins).slice(0, 10));
 
-    // 3. Trend data
-    const dayCount = (new Date(end) - new Date(start)) / (1000 * 3600 * 24);
-    let grouped;
-    if (dayCount <= 31) {
-      const map = new Map();
-      callsArray.forEach(call => {
-        const day = call.call_time.slice(0, 10);
-        map.set(day, (map.get(day) || 0) + 1);
-      });
-      grouped = Array.from(map.entries()).map(([date, count]) => ({ date, count }));
-      grouped.sort((a, b) => a.date.localeCompare(b.date));
-    } else {
-      const map = new Map();
-      callsArray.forEach(call => {
-        const d = new Date(call.call_time);
-        const year = d.getFullYear();
-        const week = Math.ceil((((d - new Date(year, 0, 1)) / 86400000) + 1) / 7);
-        const key = `${year}-W${week}`;
-        map.set(key, (map.get(key) || 0) + 1);
-      });
-      grouped = Array.from(map.entries()).map(([week, count]) => ({ date: week, count }));
-      grouped.sort((a, b) => a.date.localeCompare(b.date));
-    }
-    setTrendData(grouped);
-
-    // 4. Extended Portfolio Stats
-    let activeRev = 0, disabledRev = 0;
-    let activeCount = 0, disabledCount = 0;
+    // 6. Detailed Outcomes & Agent Breakdown Logic (Combined with Percentages)
+    let activeRev = 0, disabledRev = 0, activeCount = 0, disabledCount = 0;
     clientsArray.forEach(client => {
       const aav = Number(client.aav_value_usd) || 0;
       const status = (client.account_status || '').toLowerCase().trim();
-      if (status === 'active') {
-        activeRev += aav;
-        activeCount++;
-      } else if (status === 'disabled') {
-        disabledRev += aav;
-        disabledCount++;
-      }
+      if (status === 'active') { activeRev += aav; activeCount++; }
+      else if (status === 'disabled') { disabledRev += aav; disabledCount++; }
     });
 
     const callOutcomes = { Answer: 0, 'Did not answer': 0, Busy: 0, Unreachable: 0 };
-    const responseOutcomes = {
-      Paid: 0, 'Promise to pay': 0, Travel: 0, 'Not interested': 0,
-      'To collect equipment': 0, 'No longer using our service': 0, Other: 0,
-    };
+    const responseOutcomes = { Paid: 0, 'Promise to pay': 0, Travel: 0, 'Not interested': 0, 'To collect equipment': 0, 'No longer using our service': 0, Other: 0 };
+    
     callsArray.forEach(call => {
-      const outcome = call.call_outcome;
-      if (outcome === 'Answer') callOutcomes.Answer++;
-      else if (outcome === 'Did not answer') callOutcomes['Did not answer']++;
-      else if (outcome === 'Busy') callOutcomes.Busy++;
-      else if (outcome === 'Unreachable') callOutcomes.Unreachable++;
-
-      if (call.call_type === 'Winback' || call.call_type === 'Payment Reminder') {
-        const resp = call.response_outcome;
-        if (resp === 'Paid') responseOutcomes.Paid++;
-        else if (resp === 'Promise to pay') responseOutcomes['Promise to pay']++;
-        else if (resp === 'Travel') responseOutcomes.Travel++;
-        else if (resp === 'Not interested') responseOutcomes['Not interested']++;
-        else if (resp === 'To collect equipment') responseOutcomes['To collect equipment']++;
-        else if (resp === 'No longer using our service') responseOutcomes['No longer using our service']++;
-        else if (resp === 'Other') responseOutcomes.Other++;
-      }
+      if (callOutcomes.hasOwnProperty(call.call_outcome)) callOutcomes[call.call_outcome]++;
+      if (responseOutcomes.hasOwnProperty(call.response_outcome)) responseOutcomes[call.response_outcome]++;
     });
 
-    // 5. Agent breakdown
     const allAgents = [...new Set(clientsArray.map(c => c.retention_agent).filter(Boolean))];
-    const agentBreakdownMap = new Map();
-    allAgents.forEach(agent => {
-      agentBreakdownMap.set(agent, {
-        activeRevenue: 0, disabledRevenue: 0,
-        activeCount: 0, disabledCount: 0,
-        totalCalls: 0,
-        callOutcomes: { Answer: 0, 'Did not answer': 0, Busy: 0, Unreachable: 0 },
-        responseOutcomes: {
-          Paid: 0, 'Promise to pay': 0, Travel: 0, 'Not interested': 0,
-          'To collect equipment': 0, 'No longer using our service': 0, Other: 0,
-        },
-      });
-    });
-    
-    clientsArray.forEach(client => {
-      const agent = client.retention_agent;
-      if (!agent || !agentBreakdownMap.has(agent)) return;
-      const aav = Number(client.aav_value_usd) || 0;
-      const rec = agentBreakdownMap.get(agent);
-      const status = (client.account_status || '').toLowerCase().trim();
-      if (status === 'active') {
-        rec.activeRevenue += aav;
-        rec.activeCount++;
-      } else if (status === 'disabled') {
-        rec.disabledRevenue += aav;
-        rec.disabledCount++;
-      }
-    });
+    const agentBreakdown = allAgents.map(agent => {
+        const aClients = clientsArray.filter(c => c.retention_agent === agent);
+        const aActive = aClients.filter(c => c.account_status?.toLowerCase().trim() === 'active');
+        const aDisabled = aClients.filter(c => c.account_status?.toLowerCase().trim() === 'disabled');
+        const aActiveAAV = aActive.reduce((sum, c) => sum + (Number(c.aav_value_usd) || 0), 0);
+        const aDisabledAAV = aDisabled.reduce((sum, c) => sum + (Number(c.aav_value_usd) || 0), 0);
 
-    callsArray.forEach(call => {
-      const agent = call.agent_email;
-      if (!agent || !agentBreakdownMap.has(agent)) return;
-      const rec = agentBreakdownMap.get(agent);
-      rec.totalCalls++;
-      const outcome = call.call_outcome;
-      if (outcome === 'Answer') rec.callOutcomes.Answer++;
-      else if (outcome === 'Did not answer') rec.callOutcomes['Did not answer']++;
-      else if (outcome === 'Busy') rec.callOutcomes.Busy++;
-      else if (outcome === 'Unreachable') rec.callOutcomes.Unreachable++;
-      if (call.call_type === 'Winback' || call.call_type === 'Payment Reminder') {
-        const resp = call.response_outcome;
-        if (resp === 'Paid') rec.responseOutcomes.Paid++;
-        else if (resp === 'Promise to pay') rec.responseOutcomes['Promise to pay']++;
-        else if (resp === 'Travel') rec.responseOutcomes.Travel++;
-        else if (resp === 'Not interested') rec.responseOutcomes['Not interested']++;
-        else if (resp === 'To collect equipment') rec.responseOutcomes['To collect equipment']++;
-        else if (resp === 'No longer using our service') rec.responseOutcomes['No longer using our service']++;
-        else if (resp === 'Other') rec.responseOutcomes.Other++;
-      }
+        // Fetch calls specific to this agent for the detail tables
+        const aCalls = callsArray.filter(c => c.agent_email === agent);
+        const aOutcomes = { Answer: 0, 'Did not answer': 0, Busy: 0, Unreachable: 0 };
+        const aResp = { Paid: 0, 'Promise to pay': 0, Travel: 0, 'Not interested': 0, 'To collect equipment': 0, 'No longer using our service': 0, Other: 0 };
+        aCalls.forEach(c => {
+            if (aOutcomes.hasOwnProperty(c.call_outcome)) aOutcomes[c.call_outcome]++;
+            if (aResp.hasOwnProperty(c.response_outcome)) aResp[c.response_outcome]++;
+        });
+
+        return {
+            agent,
+            activeRevenue: aActiveAAV,
+            activeRevPct: activeRev ? ((aActiveAAV / activeRev) * 100).toFixed(1) : 0,
+            disabledRevenue: aDisabledAAV,
+            disabledRevPct: disabledRev ? ((aDisabledAAV / disabledRev) * 100).toFixed(1) : 0,
+            activeCount: aActive.length,
+            activeCountPct: activeCount ? ((aActive.length / activeCount) * 100).toFixed(1) : 0,
+            disabledCount: aDisabled.length,
+            disabledCountPct: disabledCount ? ((aDisabled.length / disabledCount) * 100).toFixed(1) : 0,
+            totalCalls: aCalls.length,
+            callOutcomes: aOutcomes,
+            responseOutcomes: aResp
+        };
     });
-    
-    const agentBreakdown = Array.from(agentBreakdownMap.entries()).map(([agent, data]) => ({ agent, ...data }));
 
     setExtendedKPIs({
       activeRevenue: activeRev,
@@ -286,144 +224,138 @@ export default function ManagerDashboard() {
       responseOutcomes,
       agentBreakdown,
     });
+
     setLoading(false);
   };
 
-  useEffect(() => {
-    fetchData();
-  }, [range, customStart, customEnd]);
+  useEffect(() => { fetchData(); }, [range, customStart, customEnd]);
 
   const handleRangeChange = (newRange) => {
     setRange(newRange);
     setShowCustom(newRange === 'Custom');
-    if (newRange !== 'Custom') {
-      fetchData();
-    }
   };
 
-  const applyCustomRange = () => {
-    if (customStart && customEnd) {
-      fetchData();
-    } else {
-      alert('Please select both From and To dates');
-    }
-  };
+  if (loading) return <div style={{ padding: '40px', textAlign: 'center' }}>Updating Intelligence Dashboard...</div>;
 
-  if (loading) return <div style={{ padding: '20px', textAlign: 'center' }}>Loading manager dashboard...</div>;
-
-  const maxCount = Math.max(...trendData.map(d => d.count), 1);
-  const isDaily = trendData.length > 0 && trendData[0].date.includes('-W') === false;
-  const { activeRevenue, disabledRevenue, totalActiveAccounts, totalDisabledAccounts, callOutcomes, responseOutcomes, agentBreakdown } = extendedKPIs;
+  const totalAAV = extendedKPIs.activeRevenue + extendedKPIs.disabledRevenue;
+  const totalCalls = kpis.totalCalls || 1;
+  const maxTrend = Math.max(...trendData.map(d => d.count), 1);
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', marginBottom: '1rem' }}>
-        <h2>Manager Dashboard – KPIs</h2>
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+    <div className="dashboard-container">
+      {/* HEADER & FILTERS */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', marginBottom: '1.5rem' }}>
+        <h2>Manager Strategic Dashboard</h2>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           <DateRangeFilter value={range} onChange={handleRangeChange} />
           {showCustom && (
-            <>
+            <div style={{ display: 'flex', gap: '5px' }}>
               <input type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)} />
-              <span>to</span>
               <input type="date" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} />
-              <button onClick={applyCustomRange}>Apply</button>
-            </>
+              <button onClick={fetchData}>Apply</button>
+            </div>
           )}
         </div>
       </div>
 
+      {/* KPI ROW 1: PRIMARY PORTFOLIO */}
       <div className="stats-grid">
-        <div className="stat-card"><div className="stat-number">{kpis.totalCalls}</div><div className="stat-label">Total Calls</div></div>
-        <div className="stat-card"><div className="stat-number">{kpis.successfulWinbacks}</div><div className="stat-label">Successful Winbacks</div></div>
-        <div className="stat-card"><div className="stat-number">{kpis.winbackConversionRate}%</div><div className="stat-label">Winback Conversion</div></div>
-        <div className="stat-card"><div className="stat-number">${Number(kpis.revenue).toLocaleString(undefined, {minimumFractionDigits: 2})}</div><div className="stat-label">Paid Revenue (AAV)</div></div>
-        <div className="stat-card"><div className="stat-number">{kpis.uniqueClients}</div><div className="stat-label">Unique Clients</div></div>
-        {kpis.avgCallDuration > 0 && (
-          <div className="stat-card"><div className="stat-number">{kpis.avgCallDuration}s</div><div className="stat-label">Avg Call Duration</div></div>
-        )}
+        <div className="stat-card">
+          <div className="stat-number">{kpis.totalAccountUniverse}</div>
+          <div className="stat-label">Total Accounts (Universe)</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-number">${extendedKPIs.activeRevenue.toLocaleString()}</div>
+          <div className="stat-label">Active AAV ({totalAAV ? ((extendedKPIs.activeRevenue / totalAAV) * 100).toFixed(1) : 0}%)</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-number">${extendedKPIs.disabledRevenue.toLocaleString()}</div>
+          <div className="stat-label">Disabled AAV ({totalAAV ? ((extendedKPIs.disabledRevenue / totalAAV) * 100).toFixed(1) : 0}%)</div>
+        </div>
       </div>
 
+      {/* KPI ROW 2: ACCOUNT VOLUME & WINBACKS */}
       <div className="stats-grid" style={{ marginTop: '1rem' }}>
-        <div className="stat-card"><div className="stat-number">${Number(activeRevenue).toFixed(2)}</div><div className="stat-label">Active Portfolio AAV</div></div>
-        <div className="stat-card"><div className="stat-number">${Number(disabledRevenue).toFixed(2)}</div><div className="stat-label">Disabled Portfolio AAV</div></div>
-        <div className="stat-card"><div className="stat-number">{totalActiveAccounts}</div><div className="stat-label">Active Accounts</div></div>
-        <div className="stat-card"><div className="stat-number">{totalDisabledAccounts}</div><div className="stat-label">Disabled Accounts</div></div>
+        <div className="stat-card">
+          <div className="stat-number">{extendedKPIs.totalActiveAccounts}</div>
+          <div className="stat-label">Active Accounts ({((extendedKPIs.totalActiveAccounts / kpis.totalAccountUniverse) * 100).toFixed(1)}%)</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-number">{extendedKPIs.totalDisabledAccounts}</div>
+          <div className="stat-label">Disabled Accounts ({((extendedKPIs.totalDisabledAccounts / kpis.totalAccountUniverse) * 100).toFixed(1)}%)</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-number">${kpis.revenue.toLocaleString()}</div>
+          <div className="stat-label">Paid Winback Revenue</div>
+        </div>
       </div>
 
+      {/* KPI ROW 3: CALL PERFORMANCE PERCENTAGES */}
       <div className="stats-grid" style={{ marginTop: '1rem' }}>
-        <div className="stat-card"><div className="stat-number">{callOutcomes.Answer}</div><div className="stat-label">Answered Calls</div></div>
-        <div className="stat-card"><div className="stat-number">{callOutcomes['Did not answer']}</div><div className="stat-label">Did Not Answer</div></div>
-        <div className="stat-card"><div className="stat-number">{callOutcomes.Busy}</div><div className="stat-label">Busy</div></div>
-        <div className="stat-card"><div className="stat-number">{callOutcomes.Unreachable}</div><div className="stat-label">Unreachable</div></div>
+        <div className="stat-card">
+          <div className="stat-number" style={{ color: '#4caf50' }}>{((extendedKPIs.callOutcomes.Answer / totalCalls) * 100).toFixed(1)}%</div>
+          <div className="stat-label">Answer Rate</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-number" style={{ color: '#ff9800' }}>{((extendedKPIs.callOutcomes['Did not answer'] / totalCalls) * 100).toFixed(1)}%</div>
+          <div className="stat-label">No Answer Rate</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-number" style={{ color: '#f44336' }}>{((extendedKPIs.callOutcomes.Busy / totalCalls) * 100).toFixed(1)}%</div>
+          <div className="stat-label">Busy Rate</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-number" style={{ color: '#9e9e9e' }}>{((extendedKPIs.callOutcomes.Unreachable / totalCalls) * 100).toFixed(1)}%</div>
+          <div className="stat-label">Unreachable Rate</div>
+        </div>
       </div>
 
-      <div className="card" style={{ marginBottom: '2rem' }}>
-        <h3 style={{ marginBottom: '1rem' }}>Call Trend ({isDaily ? 'daily' : 'weekly'})</h3>
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end', justifyContent: 'space-around', flexWrap: 'wrap' }}>
+      {/* TREND CHART */}
+      <div className="card" style={{ marginTop: '2rem', padding: '1.5rem' }}>
+        <h3>Call Activity Trend</h3>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end', height: '180px', marginTop: '1rem', borderBottom: '2px solid #eee' }}>
           {trendData.map(item => (
-            <div key={item.date} style={{ textAlign: 'center', flex: 1, minWidth: '50px' }}>
-              <div style={{
-                backgroundColor: 'var(--primary)',
-                height: `${(item.count / maxCount) * 120}px`,
-                width: '30px',
-                margin: '0 auto',
-                borderRadius: '8px 8px 4px 4px',
-                transition: 'height 0.3s',
-              }} />
-              <div style={{ marginTop: '8px', fontSize: '0.7rem' }}>{item.date.slice(5)}</div>
-              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{item.count}</div>
+            <div key={item.date} style={{ flex: 1, backgroundColor: 'var(--primary, #007bff)', height: `${(item.count / maxTrend) * 100}%`, borderRadius: '4px 4px 0 0', position: 'relative' }} title={`${item.date}: ${item.count}`}>
+               <span style={{ position: 'absolute', bottom: '-25px', left: '50%', transform: 'translateX(-50%)', fontSize: '0.65rem', whiteSpace: 'nowrap' }}>{item.date.split('-').slice(1).join('/')}</span>
             </div>
           ))}
         </div>
       </div>
 
-      <div className="table-container" style={{ marginBottom: '2rem' }}>
-        <h3 style={{ padding: '1rem 1rem 0 1rem' }}>Top Agent Performance (by winbacks)</h3>
+      {/* AGENT STRATEGIC TABLE (Dual Metric columns) */}
+      <div className="table-container" style={{ marginTop: '3rem' }}>
+        <h3 style={{ padding: '1rem' }}>Agent Portfolio Performance (% Contribution)</h3>
         <div style={{ overflowX: 'auto' }}>
-          <table style={{ minWidth: '600px' }}>
+          <table>
             <thead>
-              <tr>
-                <th>Agent</th><th>Successful Winbacks</th><th>Revenue Generated (AAV)</th>
+              <tr style={{ textAlign: 'left', background: '#f8f9fa' }}>
+                <th style={{ padding: '12px' }}>Agent</th>
+                <th>Active AAV ($ | %)</th>
+                <th>Disabled AAV ($ | %)</th>
+                <th>Active ACCTS (# | %)</th>
+                <th>Disabled ACCTS (# | %)</th>
               </tr>
             </thead>
             <tbody>
-              {agentPerformance.length === 0 ? (
-                <tr><td colSpan={3} style={{ textAlign: 'center', padding: '2rem' }}>No winback data</td></tr>
-              ) : (
-                agentPerformance.map(agent => (
-                  <tr key={agent.email}>
-                    <td>{agent.email}</td><td>{agent.wins}</td><td>${Number(agent.revenue).toFixed(2)}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div className="table-container" style={{ marginBottom: '2rem' }}>
-        <h3 style={{ padding: '1rem 1rem 0 1rem' }}>Agent Performance Details</h3>
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ minWidth: '800px' }}>
-            <thead>
-              <tr>
-                <th>Agent</th><th>Active AAV</th><th>Disabled AAV</th><th>Active Accts</th><th>Disabled Accts</th>
-                <th>Calls</th><th>Answer</th><th>No Ans</th><th>Busy</th><th>Unreach</th>
-              </tr>
-            </thead>
-            <tbody>
-              {agentBreakdown.map(agent => (
-                <tr key={agent.agent}>
-                  <td>{agent.agent}</td>
-                  <td>${agent.activeRevenue.toFixed(2)}</td>
-                  <td>${agent.disabledRevenue.toFixed(2)}</td>
-                  <td>{agent.activeCount}</td>
-                  <td>{agent.disabledCount}</td>
-                  <td>{agent.totalCalls}</td>
-                  <td>{agent.callOutcomes.Answer}</td>
-                  <td>{agent.callOutcomes['Did not answer']}</td>
-                  <td>{agent.callOutcomes.Busy}</td>
-                  <td>{agent.callOutcomes.Unreachable}</td>
+              {extendedKPIs.agentBreakdown.map(agent => (
+                <tr key={agent.agent} style={{ borderBottom: '1px solid #eee' }}>
+                  <td style={{ padding: '12px', fontWeight: '600' }}>{agent.agent}</td>
+                  <td>
+                    <div style={{ fontWeight: '600' }}>${agent.activeRevenue.toLocaleString()}</div>
+                    <div style={{ fontSize: '0.75rem', color: '#007bff' }}>{agent.activeRevPct}% of Portfolio</div>
+                  </td>
+                  <td>
+                    <div style={{ fontWeight: '600' }}>${agent.disabledRevenue.toLocaleString()}</div>
+                    <div style={{ fontSize: '0.75rem', color: '#e91e63' }}>{agent.disabledRevPct}% of Portfolio</div>
+                  </td>
+                  <td>
+                    <div style={{ fontWeight: '600' }}>{agent.activeCount}</div>
+                    <div style={{ fontSize: '0.75rem', color: '#666' }}>{agent.activeCountPct}% Load</div>
+                  </td>
+                  <td>
+                    <div style={{ fontWeight: '600' }}>{agent.disabledCount}</div>
+                    <div style={{ fontSize: '0.75rem', color: '#666' }}>{agent.disabledCountPct}% Load</div>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -431,38 +363,57 @@ export default function ManagerDashboard() {
         </div>
       </div>
 
-      <div className="table-container" style={{ marginBottom: '2rem' }}>
-        <h3 style={{ padding: '1rem 1rem 0 1rem' }}>Response Outcomes (Winback / Payment Reminder)</h3>
+      {/* TOP AGENT LEADERBOARD */}
+      <div className="table-container" style={{ marginTop: '2rem' }}>
+        <h3 style={{ padding: '1rem' }}>Top Agent Winback Results</h3>
+        <table>
+          <thead>
+            <tr><th>Agent Email</th><th>Wins</th><th>Revenue Generated</th></tr>
+          </thead>
+          <tbody>
+            {agentPerformance.length === 0 ? <tr><td colSpan={3} style={{ textAlign: 'center' }}>No winback data for this period</td></tr> :
+              agentPerformance.map(agent => (
+                <tr key={agent.email}><td>{agent.email}</td><td>{agent.wins}</td><td>${agent.revenue.toLocaleString()}</td></tr>
+              ))
+            }
+          </tbody>
+        </table>
+      </div>
+
+      {/* AGENT CALL & RESPONSE OUTCOME TABLES (Original Full Tables) */}
+      <div className="table-container" style={{ marginTop: '2rem' }}>
+        <h3 style={{ padding: '1rem' }}>Agent Call Outcomes (Answer, Busy, etc)</h3>
         <div style={{ overflowX: 'auto' }}>
-          <table style={{ minWidth: '1000px' }}>
+          <table>
             <thead>
-              <tr>
-                <th>Agent</th><th>Paid</th><th>Promise to pay</th><th>Travel</th><th>Not interested</th>
-                <th>To collect equip.</th><th>No longer using</th><th>Other</th>
-              </tr>
+              <tr><th>Agent</th><th>Total Calls</th><th>Answer</th><th>No Answer</th><th>Busy</th><th>Unreachable</th></tr>
             </thead>
             <tbody>
-              {agentBreakdown.map(agent => (
-                <tr key={agent.agent}>
-                  <td>{agent.agent}</td>
-                  <td>{agent.responseOutcomes.Paid}</td>
-                  <td>{agent.responseOutcomes['Promise to pay']}</td>
-                  <td>{agent.responseOutcomes.Travel}</td>
-                  <td>{agent.responseOutcomes['Not interested']}</td>
-                  <td>{agent.responseOutcomes['To collect equipment']}</td>
-                  <td>{agent.responseOutcomes['No longer using our service']}</td>
-                  <td>{agent.responseOutcomes.Other}</td>
+              {extendedKPIs.agentBreakdown.map(a => (
+                <tr key={a.agent}>
+                  <td>{a.agent}</td><td>{a.totalCalls}</td><td>{a.callOutcomes.Answer}</td><td>{a.callOutcomes['Did not answer']}</td><td>{a.callOutcomes.Busy}</td><td>{a.callOutcomes.Unreachable}</td>
                 </tr>
               ))}
-              <tr style={{ background: 'var(--bg)', fontWeight: 'bold' }}>
-                <td><strong>TOTAL</strong></td>
-                <td><strong>{responseOutcomes.Paid}</strong></td>
-                <td><strong>{responseOutcomes['Promise to pay']}</strong></td>
-                <td><strong>{responseOutcomes.Travel}</strong></td>
-                <td><strong>{responseOutcomes['Not interested']}</strong></td>
-                <td><strong>{responseOutcomes['To collect equipment']}</strong></td>
-                <td><strong>{responseOutcomes['No longer using our service']}</strong></td>
-                <td><strong>{responseOutcomes.Other}</strong></td>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="table-container" style={{ marginTop: '2rem', marginBottom: '3rem' }}>
+        <h3 style={{ padding: '1rem' }}>Response Outcomes (Paid, Promise, etc)</h3>
+        <div style={{ overflowX: 'auto' }}>
+          <table>
+            <thead>
+              <tr><th>Agent</th><th>Paid</th><th>Promise</th><th>Travel</th><th>Not Interested</th><th>Other</th></tr>
+            </thead>
+            <tbody>
+              {extendedKPIs.agentBreakdown.map(a => (
+                <tr key={a.agent}>
+                  <td>{a.agent}</td><td>{a.responseOutcomes.Paid}</td><td>{a.responseOutcomes['Promise to pay']}</td><td>{a.responseOutcomes.Travel}</td><td>{a.responseOutcomes['Not interested']}</td><td>{a.responseOutcomes.Other}</td>
+                </tr>
+              ))}
+              <tr style={{ background: '#f8f9fa', fontWeight: 'bold' }}>
+                <td>TOTAL</td><td>{extendedKPIs.responseOutcomes.Paid}</td><td>{extendedKPIs.responseOutcomes['Promise to pay']}</td><td>{extendedKPIs.responseOutcomes.Travel}</td><td>{extendedKPIs.responseOutcomes['Not interested']}</td><td>{extendedKPIs.responseOutcomes.Other}</td>
               </tr>
             </tbody>
           </table>
