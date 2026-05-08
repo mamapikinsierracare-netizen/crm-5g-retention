@@ -68,6 +68,10 @@ export default function BulkUpload({ user }) {
           const rawStatus = String(row['Account Status'] || row.account_status || '').toLowerCase();
           if (rawStatus.includes('disab')) status = 'disabled';
 
+          // CLEAN NUMBER LOGIC (Fixes the "text vs integer" Database error)
+          const cleanExpiresIn = parseInt(row['Expires In'] || row.expires_in, 10);
+          const cleanDisabledFor = parseInt(row['Disabled For'] || row.disabled_for, 10);
+
           return {
             account_id: accountId,
             name: name,
@@ -78,8 +82,11 @@ export default function BulkUpload({ user }) {
             installation_date: formattedDate,
             account_status: status,
             aav_value_usd: parseFloat(row['AAV (USD)'] || row.aav_value_usd) || 0,
-            expires_in: parseInt(row['Expires In'] || row.expires_in) || 0,
-            disabled_for: parseInt(row['Disabled For'] || row.disabled_for) || 0,
+            
+            // Force values to be numbers; use 0 if the cell is empty or has text
+            expires_in: isNaN(cleanExpiresIn) ? 0 : cleanExpiresIn,
+            disabled_for: isNaN(cleanDisabledFor) ? 0 : cleanDisabledFor,
+            
             updated_at: new Date().toISOString(),
             updated_by: user.email
           }
@@ -97,7 +104,8 @@ export default function BulkUpload({ user }) {
         const { error } = await supabase.from('clients').upsert(dataToUpload, { onConflict: 'account_id' })
 
         if (error) {
-          alert("Database Error: " + error.message)
+          console.error("Supabase Error:", error);
+          alert("Database Error: " + error.message);
         } else {
           setResult({ 
             total: dataToUpload.length, 
@@ -148,7 +156,7 @@ export default function BulkUpload({ user }) {
               </ul>
             </details>
           )}
-          <button onClick={() => window.location.reload()} style={{ marginTop: '1rem', width: '100%', padding: '10px', cursor: 'pointer' }}>
+          <button onClick={() => window.location.reload()} style={{ marginTop: '1rem', width: '100%', padding: '10px', cursor: 'pointer', background: '#007bff', color: 'white', border: 'none', borderRadius: '4px' }}>
             Refresh Customer List
           </button>
         </div>
