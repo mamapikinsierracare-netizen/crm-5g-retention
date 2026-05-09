@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../supabase';
 
 export default function TwoFactorSetup({ user }) {
@@ -8,17 +8,23 @@ export default function TwoFactorSetup({ user }) {
   const [enabled, setEnabled] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  // Define checkMFA BEFORE useEffect
-  const checkMFA = async () => {
+  // MODIFICATION: Wrapped in useCallback
+  const checkMFA = useCallback(async () => {
     const { data: factors } = await supabase.auth.mfa.listFactors();
-    const totp = factors.totp.find(f => f.status === 'verified');
-    setEnabled(!!totp);
-  };
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    checkMFA();
+    // Safely handle cases where factors might be empty
+    if (factors && factors.totp) {
+      const totp = factors.totp.find(f => f.status === 'verified');
+      setEnabled(!!totp);
+    }
   }, []);
+
+  // MODIFICATION: Safe async effect execution
+  useEffect(() => {
+    const initMFA = async () => {
+      await checkMFA();
+    }
+    initMFA();
+  }, [checkMFA]);
 
   const enroll = async () => {
     setLoading(true);
@@ -27,11 +33,13 @@ export default function TwoFactorSetup({ user }) {
       issuer: '5G Retention CRM',
       friendlyName: user.email,
     });
+    
     if (error) {
       alert(error.message);
       setLoading(false);
       return;
     }
+    
     setFactorId(data.id);
     setQr(data.totp.qr_code);
     setLoading(false);
@@ -42,11 +50,13 @@ export default function TwoFactorSetup({ user }) {
       alert('Please enter a valid 6-digit code');
       return;
     }
+    
     setLoading(true);
     const { error } = await supabase.auth.mfa.challengeAndVerify({
       factorId,
       code,
     });
+    
     if (error) {
       alert(error.message);
     } else {

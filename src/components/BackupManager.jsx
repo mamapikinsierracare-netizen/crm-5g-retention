@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { supabase } from '../supabase'
 
 export default function BackupManager({ user }) {
@@ -9,12 +9,14 @@ export default function BackupManager({ user }) {
   const [message, setMessage] = useState(null)
   const [backupName, setBackupName] = useState('')
 
-  const fetchBackups = async () => {
+  // MODIFICATION: Wrapped in useCallback for React Compiler compliance
+  const fetchBackups = useCallback(async () => {
     setLoading(true)
     const { data, error } = await supabase
       .from('backups')
       .select('*')
       .order('created_at', { ascending: false })
+    
     if (error) {
       console.error(error)
       setMessage({ type: 'error', text: 'Failed to load backups' })
@@ -22,12 +24,15 @@ export default function BackupManager({ user }) {
       setBackups(data || [])
     }
     setLoading(false)
-  }
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    fetchBackups()
   }, [])
+
+  // MODIFICATION: Safe async effect execution
+  useEffect(() => {
+    const loadBackups = async () => {
+      await fetchBackups();
+    }
+    loadBackups();
+  }, [fetchBackups])
 
   const createBackup = async () => {
     if (!backupName.trim()) {
@@ -38,11 +43,13 @@ export default function BackupManager({ user }) {
     const { data: clients, error } = await supabase
       .from('clients')
       .select('*')
+    
     if (error) {
       alert('Error fetching clients: ' + error.message)
       setCreating(false)
       return
     }
+    
     const { error: insertError } = await supabase
       .from('backups')
       .insert({
@@ -52,6 +59,7 @@ export default function BackupManager({ user }) {
         created_at: new Date().toISOString(),
         notes: `Full backup created by ${user.email}`
       })
+      
     if (insertError) {
       alert('Error creating backup: ' + insertError.message)
     } else {
@@ -64,18 +72,21 @@ export default function BackupManager({ user }) {
   }
 
   const restoreBackup = async (backupId, backupName) => {
-    if (!confirm(`Restore backup "${backupName}"? This will update or insert all client records from the backup. Existing clients not in the backup will remain unchanged. Continue?`)) return
+    if (!window.confirm(`Restore backup "${backupName}"? This will update or insert all client records from the backup. Existing clients not in the backup will remain unchanged. Continue?`)) return
+    
     setRestoring(backupId)
     const { data: backup, error } = await supabase
       .from('backups')
       .select('backup_data')
       .eq('id', backupId)
       .single()
+      
     if (error || !backup) {
       alert('Backup data not found')
       setRestoring(null)
       return
     }
+    
     const clientsToRestore = backup.backup_data
     if (!clientsToRestore.length) {
       alert('Backup contains no client data')
@@ -86,11 +97,13 @@ export default function BackupManager({ user }) {
     const batchSize = 50
     let success = 0
     let errors = 0
+    
     for (let i = 0; i < clientsToRestore.length; i += batchSize) {
       const batch = clientsToRestore.slice(i, i + batchSize)
       const { error: upsertError } = await supabase
         .from('clients')
         .upsert(batch, { onConflict: 'account_id', ignoreDuplicates: false })
+        
       if (upsertError) {
         errors++
         console.error(upsertError)
@@ -98,6 +111,7 @@ export default function BackupManager({ user }) {
         success += batch.length
       }
     }
+    
     alert(`Restore completed: ${success} records updated/inserted, ${errors} errors`)
     setRestoring(null)
     setMessage({ type: 'success', text: `Restored backup "${backupName}"` })
@@ -105,11 +119,12 @@ export default function BackupManager({ user }) {
   }
 
   const deleteBackup = async (id, name) => {
-    if (!confirm(`Delete backup "${name}"? This cannot be undone.`)) return
+    if (!window.confirm(`Delete backup "${name}"? This cannot be undone.`)) return
     const { error } = await supabase
       .from('backups')
       .delete()
       .eq('id', id)
+      
     if (error) {
       alert('Error deleting backup: ' + error.message)
     } else {
