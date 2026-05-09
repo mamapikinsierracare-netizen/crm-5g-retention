@@ -55,17 +55,20 @@ function App() {
   }, [])
 
   const handleLogin = (userInfo) => setUser(userInfo)
+  
   const handleLogout = async () => {
     await supabase.auth.signOut()
     setUser(null)
     setView('dashboard')
   }
+  
   const toggleTheme = () => {
     setTheme(prev => prev === 'light' ? 'dark' : 'light')
   }
 
   if (!user) return <Login onLogin={handleLogin} />
 
+  // --- THE GATEKEEPER: ROLE-BASED DASHBOARD ROUTING ---
   let DashboardComponent
   if (user.role === 'finance') {
     DashboardComponent = FinanceDashboard
@@ -74,27 +77,34 @@ function App() {
   } else if (user.role === 'manager' || user.role === 'admin') {
     DashboardComponent = ManagerDashboard
   } else {
+    // Default fallback is Agent
     DashboardComponent = AgentDashboard
   }
 
-  const showUserManagement = user.role === 'manager' || user.role === 'admin'
-  const showAuditLog = user.role === 'manager' || user.role === 'admin' || user.role === 'agent'
-  const showBulkUpload = user.role === 'manager' || user.role === 'admin'
-  const showConversion = user.role === 'finance' || user.role === 'manager' || user.role === 'admin'
-  const showBackup = user.role === 'manager' || user.role === 'admin'
-  const show2FA = user.role === 'manager' || user.role === 'admin'
+  // --- THE GATEKEEPER: NAVIGATION PERMISSIONS ---
+  const isManagerOrAdmin = user.role === 'manager' || user.role === 'admin';
+  const isFinance = user.role === 'finance';
+  const isAgentOrSupervisor = user.role === 'agent' || user.role === 'supervisor';
 
   const navItems = [
     { label: 'Dashboard', view: 'dashboard', show: true },
-    { label: 'Broadcasts', view: 'broadcasts', show: true },
-    { label: 'Messages', view: 'messages', show: true },
+    
+    // Comm/Operations: Hidden from Finance
+    { label: 'Broadcasts', view: 'broadcasts', show: !isFinance },
+    { label: 'Messages', view: 'messages', show: !isFinance },
+    
+    // Global Access
     { label: 'Customers', view: 'customers', show: true },
-    { label: 'User Management', view: 'users', show: showUserManagement },
-    { label: 'Audit Log', view: 'audit', show: showAuditLog },
-    { label: 'Bulk Upload', view: 'bulk', show: showBulkUpload },
-    { label: 'Conversion', view: 'conversion', show: showConversion },
-    { label: 'Backup', view: 'backup', show: showBackup },
-    { label: '2FA Setup', view: '2fa', show: show2FA },
+    
+    // Admin / Manager Exclusive
+    { label: 'User Management', view: 'users', show: isManagerOrAdmin },
+    { label: 'Bulk Upload', view: 'bulk', show: isManagerOrAdmin },
+    { label: 'Backup', view: 'backup', show: isManagerOrAdmin },
+    { label: '2FA Setup', view: '2fa', show: isManagerOrAdmin },
+    
+    // Shared Permissions
+    { label: 'Audit Log', view: 'audit', show: isManagerOrAdmin || isAgentOrSupervisor },
+    { label: 'Conversion', view: 'conversion', show: isManagerOrAdmin || isFinance },
   ]
 
   const toggleSidebar = () => setSidebarOpen(!sidebarOpen)
