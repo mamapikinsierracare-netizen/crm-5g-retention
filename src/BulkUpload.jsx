@@ -53,7 +53,6 @@ export default function BulkUpload({ user }) {
           const accountId = String(row['Account ID'] || row.account_id || '').trim();
           const name = (row['Name'] || row.name || '').trim();
           
-          // REQUIRED BY DATABASE: ID and Name
           if (!accountId || !name) {
             errorList.push(`Row ${index + 2}: Missing ID or Name`);
             return null;
@@ -62,19 +61,16 @@ export default function BulkUpload({ user }) {
           const rawInstallDate = row['Installation Date'] || row.installation_date;
           const formattedDate = parseFlexibleDate(rawInstallDate);
 
-          // STATUS LOGIC
           let status = 'active';
           const rawStatus = String(row['Account Status'] || row.account_status || '').toLowerCase();
           if (rawStatus.includes('disab')) status = 'disabled';
 
-          // CLEAN NUMBER LOGIC
           const cleanExpiresIn = parseInt(row['Expires In'] || row.expires_in, 10);
           const cleanDisabledFor = parseInt(row['Disabled For'] || row.disabled_for, 10);
 
           return {
             account_id: accountId,
             name: name,
-            // FIX: If contact is empty, use 'N/A' to satisfy the Database Not-Null constraint
             contact: String(row['Phone/Contact'] || row.contact || '').trim() || 'N/A',
             address: (row['Address'] || row.address || '').trim() || '',
             current_package: row['Service Tag/Package Type'] || row.current_package || '',
@@ -95,20 +91,36 @@ export default function BulkUpload({ user }) {
           return;
         }
 
-        setProgress(50)
+        setProgress(30)
 
-        // SEND TO SUPABASE
-        const { error } = await supabase.from('clients').upsert(dataToUpload, { onConflict: 'account_id' })
+        // --- NEW: CHUNKING LOGIC TO BYPASS 1000 ROW LIMIT ---
+        const CHUNK_SIZE = 500;
+        let totalUpserted = 0;
+        let chunkErrors = [...errorList];
 
-        if (error) {
-          console.error("Supabase Error:", error);
-          alert("Database Error: " + error.message);
-        } else {
-          setResult({ 
-            total: dataToUpload.length, 
-            errors: errorList 
-          })
+        for (let i = 0; i < dataToUpload.length; i += CHUNK_SIZE) {
+          const chunk = dataToUpload.slice(i, i + CHUNK_SIZE);
+          
+          const { error } = await supabase
+            .from('clients')
+            .upsert(chunk, { onConflict: 'account_id' })
+
+          if (error) {
+            console.error("Supabase Error on chunk:", error);
+            chunkErrors.push(`Database Error on rows ${i} to ${i + chunk.length}: ${error.message}`);
+          } else {
+            totalUpserted += chunk.length;
+          }
+
+          // Update progress bar as chunks complete
+          const currentProgress = 30 + Math.floor(((i + chunk.length) / dataToUpload.length) * 70);
+          setProgress(currentProgress > 100 ? 100 : currentProgress);
         }
+
+        setResult({ 
+          total: totalUpserted, 
+          errors: chunkErrors 
+        })
         
         setProgress(100)
         setUploading(false)
@@ -147,7 +159,7 @@ export default function BulkUpload({ user }) {
           <p style={{ color: 'green', fontWeight: 'bold' }}>✅ Success! Processed {result.total} accounts.</p>
           {result.errors.length > 0 && (
             <details style={{ fontSize: '0.8rem', color: '#dc3545', marginTop: '10px' }}>
-              <summary>Show {result.errors.length} skipped rows</summary>
+              <summary>Show {result.errors.length} skipped rows or errors</summary>
               <ul style={{ maxHeight: '150px', overflowY: 'auto', marginTop: '10px' }}>
                 {result.errors.map((err, i) => <li key={i}>{err}</li>)}
               </ul>

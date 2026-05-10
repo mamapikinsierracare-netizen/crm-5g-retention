@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import { supabase } from './supabase';
 import CallForm from './CallForm';
 
@@ -24,7 +24,8 @@ export default function CustomersList({ user }) {
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [showModal, setShowModal] = useState(false);
   
-  const fetchDropdownOptions = async () => {
+  // MODIFICATION: Wrapped in useCallback
+  const fetchDropdownOptions = useCallback(async () => {
     try {
       const { data: packages } = await supabase
         .from('clients')
@@ -44,23 +45,48 @@ export default function CustomersList({ user }) {
     } catch (err) {
       console.error(err);
     }
-  };
-  
-  const fetchClients = async () => {
-    setLoading(true);
-    const { data, error } = await supabase
-      .from('clients')
-      .select('*')
-      .order('created_at', { ascending: false });
-    if (error) console.error(error);
-    else setClients(data || []);
-    setLoading(false);
-  };
-  
-  useEffect(() => {
-    fetchClients();
-    fetchDropdownOptions();
   }, []);
+  
+  // MODIFICATION: Wrapped in useCallback
+  const fetchClients = useCallback(async () => {
+    setLoading(true);
+    let allData = [];
+    let hasMore = true;
+    let step = 1000;
+    let start = 0;
+
+    while (hasMore) {
+      const { data, error } = await supabase
+        .from('clients')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .range(start, start + step - 1);
+
+      if (error) {
+        console.error("Fetch Error:", error);
+        break;
+      }
+
+      if (data && data.length > 0) {
+        allData = [...allData, ...data];
+        start += step;
+        if (data.length < step) hasMore = false; 
+      } else {
+        hasMore = false;
+      }
+    }
+    
+    setClients(allData);
+    setLoading(false);
+  }, []);
+  
+  // MODIFICATION: Safe async effect execution
+  useEffect(() => {
+    const loadData = async () => {
+      await Promise.all([fetchClients(), fetchDropdownOptions()]);
+    };
+    loadData();
+  }, [fetchClients, fetchDropdownOptions]);
   
   const filtered = useMemo(() => {
     let result = [...clients];
@@ -174,12 +200,24 @@ export default function CustomersList({ user }) {
     setSelectedCustomer(null);
   };
   
-  if (loading) return <div>Loading customers...</div>;
+  if (loading) return <div style={{ padding: '20px', textAlign: 'center' }}>Loading the entire customer database...</div>;
   
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-        <h2>Customers</h2>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+          <h2 style={{ margin: 0 }}>Customers</h2>
+          <span style={{ 
+            background: '#e3f2fd', 
+            color: '#0d47a1', 
+            padding: '4px 12px', 
+            borderRadius: '16px', 
+            fontSize: '0.85rem',
+            fontWeight: 'bold'
+          }}>
+            📊 Showing {filtered.length.toLocaleString()} of {clients.length.toLocaleString()} rows
+          </span>
+        </div>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           <button onClick={exportToCSV} className="btn-outline">Export to CSV</button>
           <button onClick={clearFilters}>Clear Filters</button>
