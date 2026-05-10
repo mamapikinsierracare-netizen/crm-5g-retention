@@ -1,14 +1,13 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import { supabase } from './supabase';
 import DateRangeFilter from './DateRangeFilter';
 /** * PROFESSIONAL CHART SUITE 
- * These components provide the 8 strategic visualizations requested.
+ * These components provide the strategic visualizations requested.
  */
 import { 
   PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend,
   AreaChart, Area, XAxis, YAxis, CartesianGrid, BarChart, Bar,
-  RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar,
-  ComposedChart, Line
+  RadarChart, PolarGrid, PolarAngleAxis, Radar
 } from 'recharts';
 
 /**
@@ -83,7 +82,6 @@ export default function ManagerDashboard() {
   const [range, setRange] = useState('This Month');
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
-  const [showCustom, setShowCustom] = useState(false);
   const [loading, setLoading] = useState(true);
 
   // Raw Data Containers
@@ -92,34 +90,13 @@ export default function ManagerDashboard() {
   const [agentLeaderboard, setAgentLeaderboard] = useState([]);
   const [timelineData, setTimelineData] = useState([]);
 
-  // KPI Object
-  const [kpiMetrics, setKpiMetrics] = useState({
-    totalCalls: 0,
-    successfulWinbacks: 0,
-    winbackConversionRate: 0,
-    revenueCollected: 0,
-    uniqueClientsCalled: 0,
-    portfolioUniverse: 0
-  });
-
-  // Extended Data Object
-  const [extendedStats, setExtendedStats] = useState({
-    activeRevenue: 0,
-    disabledRevenue: 0,
-    activeAcctCount: 0,
-    disabledAcctCount: 0,
-    outcomes: { Answer: 0, 'Did not answer': 0, Busy: 0, Unreachable: 0 },
-    responses: { Paid: 0, 'Promise to pay': 0, Travel: 0, 'Not interested': 0, 'To collect equipment': 0, Other: 0 },
-    agentBreakdownList: [],
-  });
-
-  // 2. DATA FETCHING LOGIC
-  const runDataSync = async () => {
+  // 2. DATA FETCHING LOGIC (Wrapped in useCallback)
+  const runDataSync = useCallback(async () => {
     setLoading(true);
     const { start, end } = getDateRange(range, customStart, customEnd);
 
     try {
-      // Fetch Call Activities with Client Join
+      // 1. Fetch Call Activities
       const { data: calls, error: cErr } = await supabase
         .from('call_activities')
         .select('*, clients!inner(aav_value_usd, retention_agent)')
@@ -130,14 +107,33 @@ export default function ManagerDashboard() {
       const validCalls = calls || [];
       setCallsRaw(validCalls);
 
-      // Fetch All Portfolio Clients
-      const { data: clients, error: clErr } = await supabase
-        .from('clients')
-        .select('*');
+      // 2. LOGIC: Fetch ALL Clients using pagination to bypass 1000 limit
+      let allClients = [];
+      let hasMore = true;
+      let step = 1000;
+      let offset = 0;
 
-      if (clErr) throw clErr;
-      const validClients = clients || [];
-      setClientsRaw(validClients);
+      while (hasMore) {
+        const { data, error } = await supabase
+          .from('clients')
+          .select('*')
+          .range(offset, offset + step - 1);
+
+        if (error) {
+          console.error("Fetch Error:", error);
+          break;
+        }
+
+        if (data && data.length > 0) {
+          allClients = [...allClients, ...data];
+          offset += step;
+          if (data.length < step) hasMore = false; 
+        } else {
+          hasMore = false;
+        }
+      }
+      
+      setClientsRaw(allClients);
 
       // --- CALCULATE TRENDS ---
       const trendMap = new Map();
@@ -171,10 +167,15 @@ export default function ManagerDashboard() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [range, customStart, customEnd]);
 
-  // Trigger Fetch on mount and filter change
-  useEffect(() => { runDataSync(); }, [range, customStart, customEnd]);
+  // Trigger Fetch safely
+  useEffect(() => { 
+    const loadData = async () => {
+      await runDataSync();
+    };
+    loadData();
+  }, [runDataSync]);
 
   // 3. STRATEGIC ANALYTICS COMPILATION
   const analytics = useMemo(() => {
@@ -262,13 +263,11 @@ export default function ManagerDashboard() {
   }, [callsRaw, clientsRaw]);
 
   // 4. CHART DATA FORMATTING
-  // Portfolio Composition Data
   const portPieData = [
     { name: 'Active', value: analytics.activeAcctCount, fill: '#007bff' },
     { name: 'Disabled', value: analytics.disabledAcctCount, fill: '#e91e63' }
   ];
 
-  // Call Outcomes Pie Data
   const outcomePieData = [
     { name: 'Answered', value: analytics.outcomeMap.Answer, fill: '#4caf50' },
     { name: 'No Ans', value: analytics.outcomeMap['Did not answer'], fill: '#ff9800' },
@@ -276,7 +275,6 @@ export default function ManagerDashboard() {
     { name: 'Unreach', value: analytics.outcomeMap.Unreachable, fill: '#9e9e9e' }
   ];
 
-  // Behavior Bar Data
   const behaviorData = analytics.agentDetailedBreakdown.slice(0, 8).map(a => ({
     name: a.shortName,
     Paid: a.paid,
@@ -284,7 +282,7 @@ export default function ManagerDashboard() {
     'No Int.': a.notInt
   }));
 
-  if (loading) return <div style={{ padding: '60px', textAlign: 'center', color: '#666' }}>Building Operations Dashboard...</div>;
+  if (loading) return <div style={{ padding: '60px', textAlign: 'center', color: '#666' }}>Crunching database volumes...</div>;
 
   const portfolioHealthPct = (analytics.activeRevenue / analytics.combinedAAV * 100).toFixed(1);
   const contactRatePct = (analytics.answeredCount / (analytics.totalCallsCount || 1) * 100).toFixed(1);
@@ -310,7 +308,7 @@ export default function ManagerDashboard() {
       {/* SECTION: KPI HIGHLIGHT CARDS (Row 1) */}
       <div className="stats-grid" style={{ marginBottom: '20px' }}>
         <div className="stat-card" style={{ boxShadow: '0 4px 6px rgba(0,0,0,0.05)' }}>
-          <div className="stat-number">{analytics.totalUniverse}</div>
+          <div className="stat-number">{analytics.totalUniverse.toLocaleString()}</div>
           <div className="stat-label">Total Accounts in System</div>
         </div>
         <div className="stat-card" style={{ borderLeft: '4px solid #007bff' }}>
@@ -330,11 +328,11 @@ export default function ManagerDashboard() {
       {/* SECTION: KPI HIGHLIGHT CARDS (Row 2 - Strategy) */}
       <div className="stats-grid" style={{ marginBottom: '30px' }}>
         <div className="stat-card">
-          <div className="stat-number">{analytics.activeAcctCount}</div>
+          <div className="stat-number">{analytics.activeAcctCount.toLocaleString()}</div>
           <div className="stat-label">Active Accounts ({((analytics.activeAcctCount / analytics.totalUniverse) * 100).toFixed(1)}%)</div>
         </div>
         <div className="stat-card">
-          <div className="stat-number">{analytics.disabledAcctCount}</div>
+          <div className="stat-number">{analytics.disabledAcctCount.toLocaleString()}</div>
           <div className="stat-label">Disabled Accounts ({((analytics.disabledAcctCount / analytics.totalUniverse) * 100).toFixed(1)}%)</div>
         </div>
         <div className="stat-card">
@@ -342,14 +340,13 @@ export default function ManagerDashboard() {
           <div className="stat-label">Team Contact Success Rate</div>
         </div>
         <div className="stat-card">
-          <div className="stat-number">{analytics.successfulWinbacks}</div>
+          <div className="stat-number">{analytics.successfulWinbacks.toLocaleString()}</div>
           <div className="stat-label">Successful Paid Winbacks</div>
         </div>
       </div>
 
       {/* SECTION: VISUAL INSIGHTS (Charts Row 1 - Main Trends) */}
       <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr 1fr', gap: '20px', marginBottom: '25px' }}>
-        {/* CHART 1: Area Timeline */}
         <div className="card" style={{ height: '380px', padding: '20px', borderRadius: '12px' }}>
           <h3 style={{ margin: '0 0 15px 0' }}>Daily Operational Volume</h3>
           <ResponsiveContainer width="100%" height="90%">
@@ -364,7 +361,6 @@ export default function ManagerDashboard() {
           </ResponsiveContainer>
         </div>
 
-        {/* CHART 2: Portfolio Donut */}
         <div className="card" style={{ height: '380px', padding: '20px', borderRadius: '12px' }}>
           <h3 style={{ margin: '0 0 15px 0' }}>Portfolio Health Mix</h3>
           <ResponsiveContainer width="100%" height="90%">
@@ -378,7 +374,6 @@ export default function ManagerDashboard() {
           </ResponsiveContainer>
         </div>
 
-        {/* CHART 3: Outcomes Pie */}
         <div className="card" style={{ height: '380px', padding: '20px', borderRadius: '12px' }}>
           <h3 style={{ margin: '0 0 15px 0' }}>Team Outcome Split</h3>
           <ResponsiveContainer width="100%" height="90%">
@@ -395,7 +390,6 @@ export default function ManagerDashboard() {
 
       {/* SECTION: VISUAL INSIGHTS (Charts Row 2 - Agent Comparisons) */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '25px' }}>
-        {/* CHART 4: Revenue Leaderboard Bar */}
         <div className="card" style={{ height: '420px', padding: '20px', borderRadius: '12px' }}>
           <h3 style={{ margin: '0 0 15px 0' }}>Agent Revenue Contribution (USD)</h3>
           <ResponsiveContainer width="100%" height="90%">
@@ -409,7 +403,6 @@ export default function ManagerDashboard() {
           </ResponsiveContainer>
         </div>
 
-        {/* CHART 5: Stacked Portfolio Bar */}
         <div className="card" style={{ height: '420px', padding: '20px', borderRadius: '12px' }}>
           <h3 style={{ margin: '0 0 15px 0' }}>Agent Load: Active vs Churned Accts</h3>
           <ResponsiveContainer width="100%" height="90%">
@@ -428,7 +421,6 @@ export default function ManagerDashboard() {
 
       {/* SECTION: VISUAL INSIGHTS (Charts Row 3 - Behavior & Quality) */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr', gap: '20px', marginBottom: '30px' }}>
-        {/* CHART 6: Quality Radar */}
         <div className="card" style={{ height: '420px', padding: '20px', borderRadius: '12px' }}>
           <h3 style={{ margin: '0 0 15px 0' }}>AAV Portfolio Quality Radar</h3>
           <ResponsiveContainer width="100%" height="90%">
@@ -441,7 +433,6 @@ export default function ManagerDashboard() {
           </ResponsiveContainer>
         </div>
 
-        {/* CHART 7: Response Behavior Grouped Bar */}
         <div className="card" style={{ height: '420px', padding: '20px', borderRadius: '12px' }}>
           <h3 style={{ margin: '0 0 15px 0' }}>Team Response Behavioral Split</h3>
           <ResponsiveContainer width="100%" height="90%">
@@ -459,31 +450,29 @@ export default function ManagerDashboard() {
         </div>
       </div>
 
-      {/* CHART 8: STRATEGIC EFFICIENCY FUNNEL (Custom Visualization) */}
+      {/* CHART 8: STRATEGIC EFFICIENCY FUNNEL */}
       <div className="card" style={{ padding: '30px', textAlign: 'center', marginBottom: '40px', borderRadius: '12px' }}>
         <h3>Operational Conversion Funnel</h3>
         <p style={{ color: '#888', fontSize: '0.9rem', marginBottom: '25px' }}>Visualizing the flow from Portfolio &rarr; Contact &rarr; Payment</p>
         <div style={{ display: 'flex', justifyContent: 'space-around', alignItems: 'center' }}>
           <div>
-            <div style={{ fontSize: '2.2rem', fontWeight: 'bold' }}>{analytics.totalUniverse}</div>
+            <div style={{ fontSize: '2.2rem', fontWeight: 'bold' }}>{analytics.totalUniverse.toLocaleString()}</div>
             <div style={{ textTransform: 'uppercase', fontSize: '0.7rem', color: '#e91e63', letterSpacing: '1px' }}>Potential Leads</div>
           </div>
           <div style={{ fontSize: '2rem', color: '#ddd' }}>▶</div>
           <div>
-            <div style={{ fontSize: '2.2rem', fontWeight: 'bold' }}>{analytics.answeredCount}</div>
+            <div style={{ fontSize: '2.2rem', fontWeight: 'bold' }}>{analytics.answeredCount.toLocaleString()}</div>
             <div style={{ textTransform: 'uppercase', fontSize: '0.7rem', color: '#ff9800', letterSpacing: '1px' }}>Total Engagements</div>
           </div>
           <div style={{ fontSize: '2rem', color: '#ddd' }}>▶</div>
           <div>
-            <div style={{ fontSize: '2.2rem', fontWeight: 'bold' }}>{analytics.successfulWinbacks}</div>
+            <div style={{ fontSize: '2.2rem', fontWeight: 'bold' }}>{analytics.successfulWinbacks.toLocaleString()}</div>
             <div style={{ textTransform: 'uppercase', fontSize: '0.7rem', color: '#4caf50', letterSpacing: '1px' }}>Recovered Revenue</div>
           </div>
         </div>
       </div>
 
-      {/* SECTION: DETAILED ANALYTICS TABLES (Legacy Preservation) */}
-      
-      {/* TABLE 1: AGENT PORTFOLIO CONTRIBUTION */}
+      {/* SECTION: DETAILED ANALYTICS TABLES */}
       <div className="table-container" style={{ marginBottom: '30px', boxShadow: '0 4px 6px rgba(0,0,0,0.05)' }}>
         <h3 style={{ padding: '20px' }}>Agent Portfolio Performance (% Impact)</h3>
         <div style={{ overflowX: 'auto' }}>
@@ -524,7 +513,6 @@ export default function ManagerDashboard() {
         </div>
       </div>
 
-      {/* TABLE 2: WINBACK LEADERBOARD */}
       <div className="table-container" style={{ marginBottom: '30px' }}>
         <h3 style={{ padding: '20px' }}>Revenue Performance Leaderboard</h3>
         <table>
@@ -541,7 +529,6 @@ export default function ManagerDashboard() {
         </table>
       </div>
 
-      {/* TABLE 3: OPERATIONAL OUTCOMES */}
       <div className="table-container" style={{ marginBottom: '30px' }}>
         <h3 style={{ padding: '20px' }}>Call Outcome Performance by Agent</h3>
         <table>
@@ -558,7 +545,6 @@ export default function ManagerDashboard() {
         </table>
       </div>
 
-      {/* TABLE 4: RESPONSE OUTCOMES (FINAL) */}
       <div className="table-container" style={{ marginBottom: '60px' }}>
         <h3 style={{ padding: '20px' }}>Strategic Behavioral Outcome Summary</h3>
         <div style={{ overflowX: 'auto' }}>
