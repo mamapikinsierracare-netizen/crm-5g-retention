@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { supabase } from './supabase'
 
-// Helper function to handle various date formats and catch "0000-00-00"
+// Helper function to handle various date formats and catch "0000-00-00" and blanks
 function parseFlexibleDate(dateStr) {
   if (!dateStr || String(dateStr).trim() === "" || String(dateStr).includes("0000-00-00")) return null;
   
@@ -51,13 +51,15 @@ export default function BulkUpload({ user }) {
         
         const dataToUpload = rows.map((row, index) => {
           const accountId = String(row['Account ID'] || row.account_id || '').trim();
-          const name = (row['Name'] || row.name || '').trim();
           
-          if (!accountId || !name) {
-            errorList.push(`Row ${index + 2}: Missing ID or Name`);
+          // MODIFICATION: We ONLY enforce Account ID now.
+          if (!accountId) {
+            errorList.push(`Row ${index + 2}: Skipped due to missing Account ID`);
             return null;
           }
 
+          // Everything else is allowed to be blank/null
+          const name = String(row['Name'] || row.name || '').trim();
           const rawInstallDate = row['Installation Date'] || row.installation_date;
           const formattedDate = parseFlexibleDate(rawInstallDate);
 
@@ -70,30 +72,30 @@ export default function BulkUpload({ user }) {
 
           return {
             account_id: accountId,
-            name: name,
-            contact: String(row['Phone/Contact'] || row.contact || '').trim() || 'N/A',
+            name: name || 'Unknown', // Safe fallback if completely blank to satisfy DB
+            contact: String(row['Phone/Contact'] || row.contact || '').trim() || 'N/A', // Safe fallback
             address: (row['Address'] || row.address || '').trim() || '',
             current_package: row['Service Tag/Package Type'] || row.current_package || '',
             retention_agent: row['Retention Agent'] || row.retention_agent || '',
-            installation_date: formattedDate,
+            installation_date: formattedDate, // Safely returns null if blank
             account_status: status,
             aav_value_usd: parseFloat(row['AAV (USD)'] || row.aav_value_usd) || 0,
-            expires_in: isNaN(cleanExpiresIn) ? 0 : cleanExpiresIn,
-            disabled_for: isNaN(cleanDisabledFor) ? 0 : cleanDisabledFor,
+            expires_in: isNaN(cleanExpiresIn) ? null : cleanExpiresIn,
+            disabled_for: isNaN(cleanDisabledFor) ? null : cleanDisabledFor,
             updated_at: new Date().toISOString(),
             updated_by: user.email
           }
         }).filter(r => r !== null);
 
         if (dataToUpload.length === 0) {
-          alert("Error: No valid rows found.");
+          alert("Error: No valid rows with an Account ID were found.");
           setUploading(false);
           return;
         }
 
         setProgress(30)
 
-        // --- NEW: CHUNKING LOGIC TO BYPASS 1000 ROW LIMIT ---
+        // --- CHUNKING LOGIC TO BYPASS 1000 ROW LIMIT ---
         const CHUNK_SIZE = 500;
         let totalUpserted = 0;
         let chunkErrors = [...errorList];
@@ -131,10 +133,11 @@ export default function BulkUpload({ user }) {
   return (
     <div className="card" style={{ maxWidth: '650px', margin: '2rem auto', padding: '20px' }}>
       <h2 style={{ textAlign: 'center' }}>Bulk Upload Clients</h2>
-      <p style={{ textAlign: 'center', fontSize: '0.9rem', color: '#666' }}>
-        <strong>Note:</strong> Missing Phone/Contact will be saved as "N/A". <br/>
-        Zero dates (0000-00-00) will be saved as empty.
-      </p>
+      
+      <div style={{ textAlign: 'center', fontSize: '0.9rem', color: '#666', background: '#f8f9fa', padding: '10px', borderRadius: '8px' }}>
+        <p style={{ margin: '0 0 5px 0' }}><strong>✅ Highly Flexible Upload Enabled</strong></p>
+        <p style={{ margin: 0 }}>The only strictly required column is <strong>Account ID</strong>. Blank dates, missing names, and missing contact info are supported and will safely sync.</p>
+      </div>
       
       <div style={{ border: '2px dashed #007bff', padding: '30px', margin: '20px 0', borderRadius: '10px', textAlign: 'center' }}>
         <input 
