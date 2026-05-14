@@ -9,7 +9,6 @@ export default function BackupManager({ user }) {
   const [message, setMessage] = useState(null)
   const [backupName, setBackupName] = useState('')
 
-  // MODIFICATION: Wrapped in useCallback for React Compiler compliance
   const fetchBackups = useCallback(async () => {
     setLoading(true)
     const { data, error } = await supabase
@@ -26,7 +25,6 @@ export default function BackupManager({ user }) {
     setLoading(false)
   }, [])
 
-  // MODIFICATION: Safe async effect execution
   useEffect(() => {
     const loadBackups = async () => {
       await fetchBackups();
@@ -40,32 +38,52 @@ export default function BackupManager({ user }) {
       return
     }
     setCreating(true)
-    const { data: clients, error } = await supabase
-      .from('clients')
-      .select('*')
     
-    if (error) {
-      alert('Error fetching clients: ' + error.message)
-      setCreating(false)
-      return
+    // --- NEW: PAGINATION LOGIC TO BYPASS 1000 ROW LIMIT FOR BACKUPS ---
+    let allClients = [];
+    let hasMore = true;
+    let step = 1000;
+    let offset = 0;
+
+    while (hasMore) {
+      const { data, error } = await supabase
+        .from('clients')
+        .select('*')
+        .range(offset, offset + step - 1);
+
+      if (error) {
+        alert('Error fetching clients for backup: ' + error.message)
+        setCreating(false)
+        return
+      }
+
+      if (data && data.length > 0) {
+        allClients = [...allClients, ...data];
+        offset += step;
+        if (data.length < step) hasMore = false; 
+      } else {
+        hasMore = false;
+      }
     }
+    // ------------------------------------------------------------------
     
+    // Insert the FULL dataset into the backups table
     const { error: insertError } = await supabase
       .from('backups')
       .insert({
         backup_name: backupName.trim(),
-        backup_data: clients,
+        backup_data: allClients,
         created_by: user.email,
         created_at: new Date().toISOString(),
-        notes: `Full backup created by ${user.email}`
+        notes: `Full backup created by ${user.email} containing ${allClients.length} records.`
       })
       
     if (insertError) {
       alert('Error creating backup: ' + insertError.message)
     } else {
       setBackupName('')
-      setMessage({ type: 'success', text: 'Backup created successfully' })
-      setTimeout(() => setMessage(null), 3000)
+      setMessage({ type: 'success', text: `Success! Secured ${allClients.length} records in backup.` })
+      setTimeout(() => setMessage(null), 4000)
       fetchBackups()
     }
     setCreating(false)
@@ -144,17 +162,17 @@ export default function BackupManager({ user }) {
         <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
           <input
             type="text"
-            placeholder="Backup name (e.g., before_daily_update_2025-01-15)"
+            placeholder="Backup name (e.g., before_daily_update)"
             value={backupName}
             onChange={(e) => setBackupName(e.target.value)}
             style={{ flex: 2, minWidth: '200px' }}
           />
           <button onClick={createBackup} disabled={creating}>
-            {creating ? 'Creating...' : 'Create Full Backup'}
+            {creating ? 'Fetching & Zipping Data...' : 'Create Full Backup'}
           </button>
         </div>
         <p style={{ fontSize: '0.8rem', marginTop: '0.5rem' }}>
-          This will save a snapshot of all clients in the `clients` table.
+          This will save a snapshot of all {'>'}1000 clients securely.
         </p>
       </div>
 
@@ -171,7 +189,7 @@ export default function BackupManager({ user }) {
                 <th>Backup Name</th>
                 <th>Created By</th>
                 <th>Created At</th>
-                <th>Records</th>
+                <th>Records Saved</th>
                 <th>Actions</th>
               </tr>
             </thead>
