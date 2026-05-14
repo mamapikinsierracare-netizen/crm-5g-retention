@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import Login from './Login'
 import AgentDashboard from './AgentDashboard'
 import FinanceDashboard from './FinanceDashboard'
@@ -17,6 +17,43 @@ import ConversionSettings from './components/ConversionSettings'
 import BackupManager from './components/BackupManager'
 import TwoFactorSetup from './components/TwoFactorSetup'
 import AgentMessageCenter from './components/AgentMessageCenter'
+
+// --- CUSTOM HOOK: Idle Timeout Monitor ---
+// Uses useRef to prevent unnecessary re-renders while keeping the callback fresh
+function useIdleTimeout(onTimeout, idleTimeMinutes = 10) {
+  const onTimeoutRef = useRef(onTimeout);
+
+  // Keep the latest callback in the ref
+  useEffect(() => {
+    onTimeoutRef.current = onTimeout;
+  }, [onTimeout]);
+
+  useEffect(() => {
+    let timeoutId;
+
+    const handleActivity = () => {
+      clearTimeout(timeoutId);
+      // Set timer for X minutes (X * 60 * 1000 ms)
+      timeoutId = setTimeout(() => {
+        onTimeoutRef.current();
+      }, idleTimeMinutes * 60 * 1000);
+    };
+
+    // Listen for any human interaction across the app
+    const events = ['mousemove', 'mousedown', 'keypress', 'DOMMouseScroll', 'mousewheel', 'touchmove', 'MSPointerMove'];
+    events.forEach(event => window.addEventListener(event, handleActivity));
+
+    // Start the initial timer
+    handleActivity();
+
+    // Cleanup on unmount
+    return () => {
+      clearTimeout(timeoutId);
+      events.forEach(event => window.removeEventListener(event, handleActivity));
+    };
+  }, [idleTimeMinutes]);
+}
+// -----------------------------------------
 
 function App() {
   const [user, setUser] = useState(null)
@@ -56,11 +93,21 @@ function App() {
 
   const handleLogin = (userInfo) => setUser(userInfo)
   
-  const handleLogout = async () => {
+  // Wrapped in useCallback for maximum stability
+  const handleLogout = useCallback(async () => {
     await supabase.auth.signOut()
     setUser(null)
     setView('dashboard')
-  }
+  }, [])
+
+  // --- ENFORCE 10-MINUTE IDLE LOCKOUT ---
+  useIdleTimeout(() => {
+    if (user) {
+      alert("Session expired due to 10 minutes of inactivity. Please log in again for security purposes.");
+      handleLogout();
+    }
+  }, 10);
+  // --------------------------------------
   
   const toggleTheme = () => {
     setTheme(prev => prev === 'light' ? 'dark' : 'light')
