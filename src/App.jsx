@@ -136,9 +136,9 @@ function App() {
   const navItems = [
     { label: 'Dashboard', view: 'dashboard', show: true },
     
-    // Comm/Operations: Hidden from Finance
-    { label: 'Broadcasts', view: 'broadcasts', show: !isFinance },
-    { label: 'Messages', view: 'messages', show: !isFinance },
+    // MODIFICATION: Broadcasts and Messages are now accessible to Finance
+    { label: 'Broadcasts', view: 'broadcasts', show: true },
+    { label: 'Messages', view: 'messages', show: true },
     
     // Global Access
     { label: 'Customers', view: 'customers', show: true },

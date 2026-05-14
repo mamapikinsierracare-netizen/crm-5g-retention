@@ -6,14 +6,11 @@ import {
   PieChart, Pie, Cell, Legend
 } from 'recharts'
 
-// --- HELPER FUNCTIONS (Moved outside to prevent re-renders) ---
-
-// 1. Existing helper for invoices
+// --- HELPER FUNCTIONS ---
 function getTimestamp() {
   return Date.now()
 }
 
-// 2. Date helper for the Audit Hub
 function getDateRange(range) {
   const now = new Date()
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
@@ -40,20 +37,15 @@ function getDateRange(range) {
 }
 
 export default function FinanceDashboard({ user }) {
-  // --- STATE: INVOICE MANAGEMENT (Original) ---
   const [pendingRequests, setPendingRequests] = useState([])
   const [loadingInvoices, setLoadingInvoices] = useState(true)
   const [uploading, setUploading] = useState(false)
 
-  // --- STATE: FINANCIAL AUDIT (New) ---
   const [range, setRange] = useState('This Month')
   const [loadingAudit, setLoadingAudit] = useState(true)
   const [financialCalls, setFinancialCalls] = useState([])
   const [globalPortfolio, setGlobalPortfolio] = useState({ active: 0, disabled: 0 })
 
-  // ------------------------------------------------------------------
-  // DATA FETCHING: INVOICE MANAGEMENT (Original logic perfectly preserved)
-  // ------------------------------------------------------------------
   const fetchPendingRequests = useCallback(async () => {
     setLoadingInvoices(true)
     const { data, error } = await supabase
@@ -75,7 +67,6 @@ export default function FinanceDashboard({ user }) {
     setLoadingInvoices(false)
   }, [])
 
-  // FIX 1: Wrapped in async function
   useEffect(() => {
     const loadRequests = async () => {
       await fetchPendingRequests()
@@ -88,7 +79,7 @@ export default function FinanceDashboard({ user }) {
 
     setUploading(true)
     const fileExt = file.name.split('.').pop()
-    const timestamp = getTimestamp()  // now React doesn't complain
+    const timestamp = getTimestamp()
     const fileName = `invoice_${requestId}_${timestamp}.${fileExt}`
     const filePath = `invoices/${fileName}`
 
@@ -125,21 +116,18 @@ export default function FinanceDashboard({ user }) {
       if (request && request.call_activities?.agent_email) {
         await supabase.from('notifications').insert([{
           user_email: request.call_activities.agent_email,
-          title: 'Invoice Ready',
-          message: `Invoice for client ${request.clients?.name} (${request.clients?.account_id}) is ready to download.`,
+          title: 'Invoice / Receipt Ready',
+          message: `Document for client ${request.clients?.name} (${request.clients?.account_id}) is ready to download.`,
           type: 'invoice_ready',
           related_id: requestId,
         }])
       }
-      alert('Invoice uploaded and agent notified!')
-      fetchPendingRequests() // Refreshes the list cleanly
+      alert('Invoice / Receipt uploaded successfully and agent notified!')
+      fetchPendingRequests()
     }
     setUploading(false)
   }
 
-  // ------------------------------------------------------------------
-  // DATA FETCHING: FINANCIAL AUDIT (New Logic)
-  // ------------------------------------------------------------------
   const fetchFinancialData = useCallback(async () => {
     setLoadingAudit(true)
     const { start, end } = getDateRange(range)
@@ -154,24 +142,46 @@ export default function FinanceDashboard({ user }) {
 
     if (error) console.error("Finance Fetch Error:", error)
     
-    const { data: clients } = await supabase.from('clients').select('account_status, aav_value_usd')
+    // --- MODIFICATION: PAGINATION TO BYPASS 1000 ROW LIMIT ---
+    let allClients = [];
+    let hasMore = true;
+    let step = 1000;
+    let offset = 0;
+
+    while (hasMore) {
+      const { data, error: clientErr } = await supabase
+        .from('clients')
+        .select('account_status, aav_value_usd')
+        .range(offset, offset + step - 1);
+
+      if (clientErr) {
+        console.error("Finance Clients Fetch Error:", clientErr);
+        break;
+      }
+
+      if (data && data.length > 0) {
+        allClients = [...allClients, ...data];
+        offset += step;
+        if (data.length < step) hasMore = false; 
+      } else {
+        hasMore = false;
+      }
+    }
+    // ---------------------------------------------------------
     
     let activeAAV = 0;
     let disabledAAV = 0;
-    if (clients) {
-      clients.forEach(c => {
-        const val = Number(c.aav_value_usd) || 0;
-        if (c.account_status?.toLowerCase() === 'active') activeAAV += val;
-        if (c.account_status?.toLowerCase() === 'disabled') disabledAAV += val;
-      })
-    }
+    allClients.forEach(c => {
+      const val = Number(c.aav_value_usd) || 0;
+      if (c.account_status?.toLowerCase() === 'active') activeAAV += val;
+      if (c.account_status?.toLowerCase() === 'disabled') disabledAAV += val;
+    })
 
     setFinancialCalls(calls || [])
     setGlobalPortfolio({ active: activeAAV, disabled: disabledAAV })
     setLoadingAudit(false)
   }, [range])
 
-  // FIX 2: Wrapped in async function
   useEffect(() => {
     const loadAuditData = async () => {
       await fetchFinancialData();
@@ -179,7 +189,6 @@ export default function FinanceDashboard({ user }) {
     loadAuditData();
   }, [fetchFinancialData])
 
-  // --- FINANCIAL ANALYTICS ENGINE ---
   const financeStats = useMemo(() => {
     const paidCalls = financialCalls.filter(c => c.response_outcome === 'Paid');
     const promiseCalls = financialCalls.filter(c => c.response_outcome === 'Promise to pay');
@@ -217,7 +226,6 @@ export default function FinanceDashboard({ user }) {
   return (
     <div style={{ padding: '20px', background: '#f8f9fa', minHeight: '100vh', color: '#333' }}>
       
-      {/* HEADER */}
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '30px' }}>
         <div>
           <h2 style={{ margin: 0, color: '#2c3e50' }}>Finance & Reconciliation Hub</h2>
@@ -226,7 +234,6 @@ export default function FinanceDashboard({ user }) {
         <DateRangeFilter value={range} onChange={setRange} />
       </header>
 
-      {/* SECTION 1: KPI HIGHLIGHT CARDS */}
       <div className="stats-grid" style={{ marginBottom: '30px' }}>
         <div className="stat-card" style={{ borderLeft: '4px solid #4caf50', background: '#fff' }}>
           <div className="stat-label">Verified Revenue Recovered</div>
@@ -253,7 +260,6 @@ export default function FinanceDashboard({ user }) {
         </div>
       </div>
 
-      {/* SECTION 2: VISUAL INSIGHTS */}
       <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '20px', marginBottom: '30px' }}>
         <div className="card" style={{ padding: '20px', height: '350px' }}>
           <h3 style={{ margin: '0 0 15px 0' }}>Daily Cash Recovery Trend ($)</h3>
@@ -288,7 +294,6 @@ export default function FinanceDashboard({ user }) {
         </div>
       </div>
 
-      {/* SECTION 3: RECONCILIATION & RECEIVABLES TABLES */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(450px, 1fr))', gap: '20px', marginBottom: '30px' }}>
         <div className="card" style={{ padding: '20px', maxHeight: '400px', overflowY: 'auto' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
@@ -363,10 +368,9 @@ export default function FinanceDashboard({ user }) {
         </div>
       </div>
 
-      {/* SECTION 4: INVOICE MANAGEMENT (Your Original Feature) */}
       <div className="card" style={{ padding: '20px', borderTop: '4px solid #007bff' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-          <h3 style={{ margin: 0 }}>🧾 Pending Invoice Requests</h3>
+          <h3 style={{ margin: 0 }}>🧾 Pending Invoice & Receipt Requests</h3>
           <button onClick={fetchPendingRequests} className="btn-outline-sm" disabled={loadingInvoices}>
             {loadingInvoices ? 'Refreshing...' : '🔄 Refresh Requests'}
           </button>
@@ -392,7 +396,7 @@ export default function FinanceDashboard({ user }) {
                 </div>
                 
                 <div>
-                  <label style={{ display: 'block', marginBottom: '5px', fontSize: '0.85rem', fontWeight: 'bold', color: '#666' }}>Upload Generated Invoice (.pdf, .jpg, .png)</label>
+                  <label style={{ display: 'block', marginBottom: '5px', fontSize: '0.85rem', fontWeight: 'bold', color: '#666' }}>Upload Invoice or Receipt (.pdf, .jpg, .png)</label>
                   <input
                     type="file"
                     accept=".pdf,.jpg,.png"
